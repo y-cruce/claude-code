@@ -54,7 +54,7 @@ function fetchJson(url) {
 
 async function downloadFile(url, destPath) {
   console.log(`  ↓ ${url.split('/').slice(-2).join('/')}`);
-  execFileSync('curl', ['-sL', '--fail', '-o', destPath, url], { timeout: 600_000 });
+  execFileSync('curl', ['-sL', '--fail', '--retry', '3', '--retry-delay', '2', '--retry-all-errors', '-o', destPath, url], { timeout: 600_000 });
   return (await stat(destPath)).size;
 }
 
