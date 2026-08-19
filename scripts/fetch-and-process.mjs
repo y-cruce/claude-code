@@ -1,5 +1,5 @@
 import { mkdir, rm, writeFile, readFile, stat, copyFile } from 'node:fs/promises';
-import { readdirSync } from 'node:fs';
+import { readdirSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { extractBunSEA } from './bun-sea-extract.mjs';
@@ -219,7 +219,9 @@ export async function fetchAndProcess({
     }
 
     // Verify Node.js compatibility before patching
-    const cliSrc = join(extractDir, 'src', 'entrypoints', 'cli.js');
+    // v2.1.224+: embedded layout flattened, cli.js at extract root
+    const legacyCli = join(extractDir, 'src', 'entrypoints', 'cli.js');
+    const cliSrc = existsSync(legacyCli) ? legacyCli : join(extractDir, 'cli.js');
     const { compatible, fatal } = verifyNodeCompat(cliSrc);
     if (!compatible) {
       console.error(`  ✗ ${platform} — Node.js compat check failed (${fatal} fatal)`);
@@ -231,7 +233,7 @@ export async function fetchAndProcess({
     // Patch cli.js
     const patchedPath = join(tmpDir, 'patched', `${platform}.js`);
     await mkdir(join(tmpDir, 'patched'), { recursive: true });
-    await patchFile(join(extractDir, 'src', 'entrypoints', 'cli.js'), patchedPath);
+    await patchFile(cliSrc, patchedPath);
 
     extractions[platform] = { extractDir, patchedPath, binPath };
     console.log(`  ✓ ${platform}`);
