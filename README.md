@@ -19,15 +19,20 @@ npm install -g @cometix/claude-code
 
 ## Compatibility patches
 
+Applied to the extracted `cli.js` (~27MB) by `scripts/node-compat-patch.mjs`. Each patch degrades gracefully: a pattern that no longer matches logs a warning instead of aborting, and the result is AST-validated before packaging.
+
 | Patch | Description |
 |-------|-------------|
-| P1 | `fileURLToPath`/`createRequire` hardcoded build paths → `__filename`/`require` |
-| P2 | `Bun.Transpiler` guard → graceful null return |
-| P3 | `/$bunfs/root/` native module requires → `vendor/` fallback |
-| P5 | `EMBEDDED_SEARCH_TOOLS` guard restored — enables Grep/Glob Tool by default; set `EMBEDDED_SEARCH_TOOLS=true` to switch to bfs/ugrep Bash shadow mode (auto-detects binary availability) |
-| P6 | Bun polyfill shim injection (global Bun API stubs) |
-| P7 | `HttpsProxyAgent` exposed on `globalThis` for Node.js ws proxy support |
-| P8 | `AF_()` shadow function patched — resolves system `bfs`/`ugrep` via `which` instead of ARGV0 multicall |
+| P1 | Hardcoded CI build paths baked in at compile time (`fileURLToPath("file:///home/runner/...")` / `createRequire("file:///home/runner/...")`) → runtime `__filename` / `require` |
+| P2 | `if (typeof Bun > "u") throw Error("Bun required")` guard around `Bun.Transpiler` → graceful `null` return. Not present since recent versions — the P6 polyfill covers it |
+| P3 | `require("/$bunfs/root/*.node")` — Bun SEA's virtual filesystem paths for native modules → resolved from the package's `vendor/` directory |
+| P5 | `EMBEDDED_SEARCH_TOOLS` guard restored (P5a: env var check, P5b: binary availability check) — enables Grep/Glob Tool by default; set `EMBEDDED_SEARCH_TOOLS=true` to switch to bfs/ugrep Bash shadow mode (falls back to Tool mode if binaries are missing) |
+| P6 | Global `Bun` polyfill shim injected at the top of the file. Implements `Bun.spawn` (Subprocess-like interface), `Bun.file`, `Bun.listen` (TCP), `Bun.serve` (HTTP/S), `Bun.hash`, `Bun.deepEquals`, `Bun.stdin`; `Bun.JSONL.parseChunk` is intentionally `null` so business code takes its own fallback path; `Bun.SQL` throws a clear not-implemented error; `Bun.Terminal`/`Bun.WebView`/heap-snapshot APIs are guarded no-ops. Skipped when the code contains ≥10 `typeof Bun` guards (dual-runtime fallbacks already present) |
+| P7 | Bundled `HttpsProxyAgent` exposed as `globalThis.__HttpsProxyAgent` — Node's `ws` needs an explicit agent to honor HTTP(S) proxies, unlike the Bun runtime |
+| P8 | `AF_()` shadow function patched — the official binary is a multicall executable that impersonates `bfs`/`ugrep` via ARGV0; under Node.js the binaries are resolved from PATH via `which` instead |
+| P9 | Package name rebranded: all `@anthropic-ai/claude-code` references (~250 occurrences) → `@cometix/claude-code`, so the built-in auto-updater installs this package instead of the official Bun build |
+
+Outside the patcher, the package also ships `bun-ink-compat.cjs` (precompiled ansi-regex/strip-ansi/string-width/ansi-styles/wrap-ansi for terminal text handling) and `install.cjs` (postinstall: detects platform incl. musl/Android, copies the platform package's `cli.js` + `vendor/` into the main package).
 
 ## Search tools
 
@@ -61,9 +66,25 @@ vendor/
 └── seccomp/         Linux sandbox (arm64 + x64)
 ```
 
-## Automated releases
+## Releases (this fork)
 
-A GitHub Actions workflow checks for new Claude Code versions every 6 hours, builds the restored package, and publishes to both GitHub Releases and npm.
+This fork does **not** publish to npm. Builds are triggered manually and produce GitHub Release artifacts only:
+
+```bash
+gh workflow run release.yml -f version=<x.y.z>
+```
+
+Install locally from the release tarballs (main package + your platform package):
+
+```bash
+npm install -g ./cometix-claude-code-<platform>-<x.y.z>.tgz ./cometix-claude-code-<x.y.z>.tgz
+```
+
+Fork changes on top of upstream:
+
+- Support the flattened Bun SEA layout introduced in v2.1.224 (`cli.js` moved from `src/entrypoints/` to the extract root) — this is what stalled upstream at v2.1.223
+- Retry binary downloads on transient CDN errors (`curl --retry`)
+- npm publish job removed from the release workflow
 
 ## License
 
