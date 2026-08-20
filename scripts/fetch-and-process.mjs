@@ -219,7 +219,7 @@ export async function fetchAndProcess({
     }
 
     // Verify Node.js compatibility before patching
-    // v2.1.224+: embedded layout flattened, cli.js at extract root
+    // v2.1.229+: embedded layout flattened, cli.js at extract root
     const legacyCli = join(extractDir, 'src', 'entrypoints', 'cli.js');
     const cliSrc = existsSync(legacyCli) ? legacyCli : join(extractDir, 'cli.js');
     const { compatible, fatal } = verifyNodeCompat(cliSrc);

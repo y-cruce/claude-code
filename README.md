@@ -82,7 +82,7 @@ npm install -g ./cometix-claude-code-<platform>-<x.y.z>.tgz ./cometix-claude-cod
 
 Fork changes on top of upstream:
 
-- Support the flattened Bun SEA layout introduced in v2.1.224 (`cli.js` moved from `src/entrypoints/` to the extract root) — this is what stalled upstream at v2.1.223
+- Support the flattened Bun SEA layout introduced in v2.1.229 (`cli.js` moved from `src/entrypoints/` to the extract root) — this is what stalls upstream builds from v2.1.229 on
 - Retry binary downloads on transient CDN errors (`curl --retry`)
 - npm publish job removed from the release workflow
 
