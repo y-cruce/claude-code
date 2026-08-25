@@ -285,11 +285,11 @@ export function astPatch(code, sourceType = 'script') {
   // throughout the code. This affects `claude update`, install-type detection,
   // and auto-updater — all of which run `npm install @anthropic-ai/claude-code`.
   //
-  // Replace with @cometix/claude-code so updates pull from the correct registry.
+  // Replace with @cometix/anthropic-cc so updates pull from the correct registry.
   // Safe because "@anthropic-ai/claude-code" only appears as PACKAGE_URL values
   // and path detection strings, not in GitHub URLs (those use "anthropics/claude-code").
   const P9_FROM = '@anthropic-ai/claude-code';
-  const P9_TO = '@cometix/claude-code';
+  const P9_TO = '@cometix/anthropic-cc';
   const p9Count = patched.split(P9_FROM).length - 1;
   if (p9Count > 0) {
     patched = patched.replaceAll(P9_FROM, P9_TO);

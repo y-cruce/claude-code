@@ -96,7 +96,7 @@ jobs:
           # Main package
           mkdir -p /tmp/pkg-wrap/package
           cp -r "$DIST/main"/* /tmp/pkg-wrap/package/
-          tar czf "./artifacts/cometix-claude-code-${VERSION}.tgz" -C /tmp/pkg-wrap package/
+          tar czf "./artifacts/cometix-anthropic-cc-${VERSION}.tgz" -C /tmp/pkg-wrap package/
           rm -rf /tmp/pkg-wrap
 
           # Platform packages
@@ -104,7 +104,7 @@ jobs:
             if [ -d "$DIST/packages/$platform" ]; then
               mkdir -p /tmp/pkg-wrap/package
               cp -r "$DIST/packages/$platform"/* /tmp/pkg-wrap/package/
-              tar czf "./artifacts/cometix-claude-code-${platform}-${VERSION}.tgz" -C /tmp/pkg-wrap package/
+              tar czf "./artifacts/cometix-anthropic-cc-${platform}-${VERSION}.tgz" -C /tmp/pkg-wrap package/
               rm -rf /tmp/pkg-wrap
             fi
           done

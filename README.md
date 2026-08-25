@@ -1,4 +1,4 @@
-# @cometix/claude-code
+# @cometix/anthropic-cc
 
 Claude Code restored for Node.js — extracted from official Bun SEA binaries and patched for Node.js runtime compatibility.
 
@@ -7,7 +7,7 @@ Starting from v2.1.113, Anthropic ships Claude Code as native Bun binaries inste
 ## Install
 
 ```bash
-npm install -g @cometix/claude-code
+npm install -g @cometix/anthropic-cc
 ```
 
 ## What it does
@@ -50,7 +50,7 @@ Applied by `scripts/node-compat-patch.mjs` — to the extracted `cli.js` (~27MB)
 | P6 | Global `Bun` polyfill shim injected at the top of the file. Implements `Bun.spawn` (Subprocess-like interface), `Bun.file`, `Bun.listen` (TCP), `Bun.serve` (HTTP/S), `Bun.hash`, `Bun.deepEquals`, `Bun.stdin`; `Bun.JSONL.parseChunk` is intentionally `null` so business code takes its own fallback path; `Bun.SQL` throws a clear not-implemented error; `Bun.Terminal`/`Bun.WebView`/heap-snapshot APIs are guarded no-ops. Skipped when the code contains ≥10 `typeof Bun` guards (dual-runtime fallbacks already present) |
 | P7 | Bundled `HttpsProxyAgent` exposed as `globalThis.__HttpsProxyAgent` — Node's `ws` needs an explicit agent to honor HTTP(S) proxies, unlike the Bun runtime |
 | P8 | `AF_()` shadow function patched — the official binary is a multicall executable that impersonates `bfs`/`ugrep` via ARGV0; under Node.js the binaries are resolved from PATH via `which` instead |
-| P9 | Package name rebranded: all `@anthropic-ai/claude-code` references (~250 occurrences) → `@cometix/claude-code`, so the built-in auto-updater installs this package instead of the official Bun build |
+| P9 | Package name rebranded: all `@anthropic-ai/claude-code` references (~250 occurrences) → `@cometix/anthropic-cc`, so the built-in auto-updater installs this package instead of the official Bun build |
 
 Outside the patcher, the package also ships `bun-ink-compat.cjs` (precompiled ansi-regex/strip-ansi/string-width/ansi-styles/wrap-ansi for terminal text handling) and `install.cjs` (postinstall: detects platform incl. musl/Android, copies the platform package's files — `cli.js` + `vendor/`, or the whole chunk tree on split builds — into the main package).
 
@@ -110,7 +110,7 @@ gh workflow run release.yml -f version=<x.y.z>
 Install locally from the release tarballs (main package + your platform package):
 
 ```bash
-npm install -g ./cometix-claude-code-<platform>-<x.y.z>.tgz ./cometix-claude-code-<x.y.z>.tgz
+npm install -g ./cometix-anthropic-cc-<platform>-<x.y.z>.tgz ./cometix-anthropic-cc-<x.y.z>.tgz
 ```
 
 Fork changes on top of upstream:

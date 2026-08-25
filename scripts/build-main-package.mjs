@@ -24,13 +24,13 @@ export async function buildMainPackage({
   // 1. package.json
   const optDeps = {};
   for (const p of ALL_PLATFORMS) {
-    optDeps[`@cometix/claude-code-${p}`] = version;
+    optDeps[`@cometix/anthropic-cc-${p}`] = version;
   }
 
   const pkg = {
-    name: '@cometix/claude-code',
+    name: '@cometix/anthropic-cc',
     version,
-    bin: { claude: 'cli.js' },
+    bin: { 'anthropic-cc': 'cli.js' },
     // v2.1.242+ ships ESM chunks that postinstall copies in next to cli.js
     ...(layout === 'split-esm' ? { type: 'module' } : {}),
     engines: { node: '>=22.0.0' },

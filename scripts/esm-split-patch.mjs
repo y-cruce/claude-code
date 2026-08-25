@@ -143,7 +143,7 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
       }
     } else {
       // P9 rebrand still has to reach every chunk that names the npm package
-      const rebranded = code.replaceAll('@anthropic-ai/claude-code', '@cometix/claude-code');
+      const rebranded = code.replaceAll('@anthropic-ai/claude-code', '@cometix/anthropic-cc');
       if (rebranded !== code) {
         code = rebranded;
         stats.ast.p9 = (stats.ast.p9 ?? 0) + 1;

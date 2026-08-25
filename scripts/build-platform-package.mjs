@@ -122,7 +122,7 @@ export async function buildPlatformPackage({
 
   // 5. package.json
   const pkg = {
-    name: `@cometix/claude-code-${platform}`,
+    name: `@cometix/anthropic-cc-${platform}`,
     version,
     description: `Claude Code Node.js restored — ${platform}`,
     ...(layout === 'split-esm' ? { type: 'module' } : {}),

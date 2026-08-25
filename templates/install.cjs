@@ -2,7 +2,7 @@
 const { copyFileSync, mkdirSync, readdirSync, statSync, existsSync } = require('fs');
 const path = require('path');
 
-const PACKAGE_PREFIX = '@cometix/claude-code';
+const PACKAGE_PREFIX = '@cometix/anthropic-cc';
 
 const PLATFORMS = {
   'darwin-arm64':  { pkg: PACKAGE_PREFIX + '-darwin-arm64' },
@@ -51,7 +51,7 @@ function main() {
   const info = PLATFORMS[platformKey];
 
   if (!info) {
-    console.error(`[@cometix/claude-code postinstall] Unsupported platform: ${process.platform} ${process.arch}`);
+    console.error(`[@cometix/anthropic-cc postinstall] Unsupported platform: ${process.platform} ${process.arch}`);
     console.error(`  Supported: ${Object.keys(PLATFORMS).join(', ')}`);
     return;
   }
@@ -60,9 +60,9 @@ function main() {
   try {
     pkgDir = path.dirname(require.resolve(info.pkg + '/package.json'));
   } catch {
-    console.error(`[@cometix/claude-code postinstall] Platform package "${info.pkg}" not found.`);
+    console.error(`[@cometix/anthropic-cc postinstall] Platform package "${info.pkg}" not found.`);
     console.error('  This happens with --omit=optional or when the download failed.');
-    console.error('  The `claude` command will show an error when invoked.');
+    console.error('  The `anthropic-cc` command will show an error when invoked.');
     return;
   }
 
@@ -79,7 +79,7 @@ function main() {
       else copyFileSync(src, to);
     }
   } catch (err) {
-    console.error(`[@cometix/claude-code postinstall] Failed to copy platform files: ${err.message}`);
+    console.error(`[@cometix/anthropic-cc postinstall] Failed to copy platform files: ${err.message}`);
     return;
   }
 
