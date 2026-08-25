@@ -15,6 +15,7 @@ const ALL_PLATFORMS = [
 
 export async function buildMainPackage({
   version,
+  layout,       // "single-cjs" or "split-esm"
   wrapperDir,   // npm wrapper package dir (for sdk-tools.d.ts, LICENSE, README)
   outputDir,
 }) {
@@ -30,6 +31,8 @@ export async function buildMainPackage({
     name: '@cometix/claude-code',
     version,
     bin: { claude: 'cli.js' },
+    // v2.1.242+ ships ESM chunks that postinstall copies in next to cli.js
+    ...(layout === 'split-esm' ? { type: 'module' } : {}),
     engines: { node: '>=22.0.0' },
     scripts: { postinstall: 'node install.cjs' },
     author: 'Anthropic <support@anthropic.com>',

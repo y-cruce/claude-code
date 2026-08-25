@@ -67,24 +67,20 @@ function main() {
   }
 
   const dest = __dirname;
-  const srcCli = path.join(pkgDir, 'cli.js');
-  const srcVendor = path.join(pkgDir, 'vendor');
 
-  // Copy cli.js
+  // Copy everything the platform package ships. Up to 2.1.241 that is one
+  // cli.js plus vendor/; from 2.1.242 it is the whole ESM chunk tree.
   try {
-    copyFileSync(srcCli, path.join(dest, 'cli.js'));
-  } catch (err) {
-    console.error(`[@cometix/claude-code postinstall] Failed to copy cli.js: ${err.message}`);
-    return;
-  }
-
-  // Copy vendor/
-  if (existsSync(srcVendor)) {
-    try {
-      copyDirSync(srcVendor, path.join(dest, 'vendor'));
-    } catch (err) {
-      console.error(`[@cometix/claude-code postinstall] Failed to copy vendor/: ${err.message}`);
+    for (const entry of readdirSync(pkgDir)) {
+      if (entry === 'package.json') continue;
+      const src = path.join(pkgDir, entry);
+      const to = path.join(dest, entry);
+      if (statSync(src).isDirectory()) copyDirSync(src, to);
+      else copyFileSync(src, to);
     }
+  } catch (err) {
+    console.error(`[@cometix/claude-code postinstall] Failed to copy platform files: ${err.message}`);
+    return;
   }
 
   // Fix node-pty spawn-helper execute permission.

@@ -73,9 +73,12 @@ jobs:
           # Copy main package to temp dir for verification
           cp -r "$DIST/main" "$VERIFY"
 
-          # Simulate postinstall with linux-x64 platform package
-          cp "$DIST/packages/linux-x64/cli.js" "$VERIFY/cli.js"
-          cp -r "$DIST/packages/linux-x64/vendor" "$VERIFY/vendor"
+          # Simulate postinstall with linux-x64 platform package.
+          # From 2.1.242 that is a whole ESM chunk tree, not just cli.js,
+          # so copy everything except the platform package.json.
+          cp "$VERIFY/package.json" /tmp/main-package.json
+          cp -R "$DIST/packages/linux-x64/." "$VERIFY/"
+          cp /tmp/main-package.json "$VERIFY/package.json"
 
           cd "$VERIFY"
           npm install --omit=optional --no-audit --no-fund

@@ -1,4 +1,4 @@
-import { mkdir, writeFile, copyFile, stat, chmod } from 'node:fs/promises';
+import { mkdir, writeFile, copyFile, stat, chmod, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // Platform key → vendor directory name mapping
@@ -15,10 +15,26 @@ function seccompArch(platformKey) {
   return platformKey.includes('arm64') ? 'arm64' : 'x64';
 }
 
+// Split-ESM builds ship the whole patched module tree; native modules are
+// re-homed under vendor/ so they are skipped here.
+async function copyModuleTree(src, dest) {
+  let count = 0;
+  await mkdir(dest, { recursive: true });
+  for (const entry of await readdir(src, { withFileTypes: true })) {
+    if (entry.name.endsWith('.node')) continue;
+    const from = join(src, entry.name);
+    const to = join(dest, entry.name);
+    if (entry.isDirectory()) count += await copyModuleTree(from, to);
+    else { await copyFile(from, to); count++; }
+  }
+  return count;
+}
+
 export async function buildPlatformPackage({
   platform,           // e.g. "darwin-arm64"
   version,
-  patchedCliPath,     // path to patched cli.js
+  layout,             // "single-cjs" or "split-esm"
+  patchedCliPath,     // path to patched cli.js (single-cjs only)
   extractDir,         // SEA extract dir (for audio-capture.node)
   ripgrepDir,         // ripgrep binaries root
   seccompDir,         // seccomp binaries root (or null)
@@ -38,10 +54,15 @@ export async function buildPlatformPackage({
     os = parts[0]; cpu = parts[1];
   }
 
-  // 1. Copy patched cli.js
-  await copyFile(patchedCliPath, join(outputDir, 'cli.js'));
+  // 1. Copy the patched cli.js (or the whole module tree for split-ESM)
+  if (layout === 'split-esm') {
+    const count = await copyModuleTree(extractDir, outputDir);
+    console.log(`  [OK] ${count} module files`);
+  } else {
+    await copyFile(patchedCliPath, join(outputDir, 'cli.js'));
+    console.log(`  [OK] cli.js`);
+  }
   await chmod(join(outputDir, 'cli.js'), 0o755);
-  console.log(`  [OK] cli.js`);
 
   // 2. vendor/audio-capture + computer-use-swift + computer-use-input
   const vd = vendorDir(platform === 'android-arm64' ? 'linux-arm64' : platform);
@@ -104,9 +125,12 @@ export async function buildPlatformPackage({
     name: `@cometix/claude-code-${platform}`,
     version,
     description: `Claude Code Node.js restored — ${platform}`,
+    ...(layout === 'split-esm' ? { type: 'module' } : {}),
     os: [os],
     cpu: [cpu],
-    files: ['cli.js', 'vendor/'],
+    files: layout === 'split-esm'
+      ? ['*.js', '*.mjs', '*.asset', 'src/', 'vendor/']
+      : ['cli.js', 'vendor/'],
     repository: { type: 'git', url: 'https://github.com/CometixSpace/claude-code.git' },
     license: 'SEE LICENSE IN README.md',
   };

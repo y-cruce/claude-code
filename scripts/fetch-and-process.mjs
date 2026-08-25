@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { extractBunSEA } from './bun-sea-extract.mjs';
 import { patchFile } from './node-compat-patch.mjs';
+import { patchSplitEsm } from './esm-split-patch.mjs';
 import { buildPlatformPackage } from './build-platform-package.mjs';
 import { buildMainPackage } from './build-main-package.mjs';
 import { verifyNodeCompat } from './verify-node-compat.mjs';
@@ -222,20 +223,28 @@ export async function fetchAndProcess({
     // v2.1.229+: embedded layout flattened, cli.js at extract root
     const legacyCli = join(extractDir, 'src', 'entrypoints', 'cli.js');
     const cliSrc = existsSync(legacyCli) ? legacyCli : join(extractDir, 'cli.js');
-    const { compatible, fatal } = verifyNodeCompat(cliSrc);
+    const { compatible, fatal, layout } = verifyNodeCompat(cliSrc);
     if (!compatible) {
       console.error(`  ✗ ${platform} — Node.js compat check failed (${fatal} fatal)`);
       console.error('    Anthropic may have removed dual-runtime fallbacks. Aborting.');
       process.exit(1);
     }
-    console.log(`  ✓ ${platform} — Node.js compat verified`);
+    console.log(`  ✓ ${platform} — Node.js compat verified (${layout})`);
 
-    // Patch cli.js
-    const patchedPath = join(tmpDir, 'patched', `${platform}.js`);
-    await mkdir(join(tmpDir, 'patched'), { recursive: true });
-    await patchFile(cliSrc, patchedPath);
+    if (layout === 'split-esm') {
+      // v2.1.242+: patch the whole extract directory in place
+      const st = await patchSplitEsm({ extractDir, entryPath: cliSrc });
+      console.log(`  ✓ ${platform} — ${st.files} modules, ${st.specifiers} specifiers, ${st.literals} runtime paths`);
+      console.log(`    patches: ${JSON.stringify(st.ast)}, import.meta.require: ${st.metaRequire}, polyfill entries: ${st.polyfillEntries}`);
+      extractions[platform] = { extractDir, layout, entryPath: cliSrc, binPath };
+    } else {
+      // Patch cli.js
+      const patchedPath = join(tmpDir, 'patched', `${platform}.js`);
+      await mkdir(join(tmpDir, 'patched'), { recursive: true });
+      await patchFile(cliSrc, patchedPath);
 
-    extractions[platform] = { extractDir, patchedPath, binPath };
+      extractions[platform] = { extractDir, layout, patchedPath, binPath };
+    }
     console.log(`  ✓ ${platform}`);
 
     // Clean up binary
@@ -267,6 +276,7 @@ export async function fetchAndProcess({
     await buildPlatformPackage({
       platform,
       version,
+      layout: ext.layout,
       patchedCliPath: ext.patchedPath,
       extractDir: ext.extractDir,
       ripgrepDir,
@@ -277,7 +287,8 @@ export async function fetchAndProcess({
 
   // ── Step 6: Build main package ──
   console.log(`\n[6] Building main package...`);
-  await buildMainPackage({ version, wrapperDir, outputDir: join(outputDir, 'main') });
+  const layout = Object.values(extractions)[0]?.layout ?? 'single-cjs';
+  await buildMainPackage({ version, layout, wrapperDir, outputDir: join(outputDir, 'main') });
 
   // ── Step 7: Cleanup ──
   console.log(`\n[7] Cleaning up...`);

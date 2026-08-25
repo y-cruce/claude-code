@@ -18,8 +18,8 @@ const LOADERS = [
 ];
 const ENCODINGS = ['binary','latin1','utf8'];
 const FORMATS  = ['none','esm','cjs'];
-const BASE_PATH_POSIX   = '/$bunfs/';
-const BASE_PATH_WINDOWS = 'B:/~BUN/';
+export const BASE_PATH_POSIX   = '/$bunfs/';
+export const BASE_PATH_WINDOWS = 'B:/~BUN/';
 const BASE_PUBLIC_PATH  = 'root/';
 
 // ──────────────────────────────────────────────

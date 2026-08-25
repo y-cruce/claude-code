@@ -84,8 +84,10 @@ function isHardcodedBuildPath(node) {
   return v.includes('/claude-cli-internal/') && v.startsWith('file:///');
 }
 
-export function astPatch(code) {
-  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'script' });
+export function astPatch(code, sourceType = 'script') {
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType });
+  // ESM chunks have no CJS require(); the polyfill exposes one globally
+  const REQ = sourceType === 'module' ? 'globalThis.__ccNodeRequire' : 'require';
   const replacements = [];
   const stats = { p1Paths: 0, p1Requires: 0, p2: false, p3: 0, p5: false, p7: false, p8: false, p9: 0 };
 
@@ -140,9 +142,9 @@ export function astPatch(code) {
       const baseName = moduleName.replace(/\.node$/, '');
       const vendorRequire = [
         '(function(){try{',
-        `var d=require("path").join(__dirname,"vendor","${baseName}",process.arch+"-"+process.platform,"${moduleName}");`,
-        'return require(d)',
-        `}catch{return require(${JSON.stringify(modulePath)})}`,
+        `var d=${REQ}("path").join(__dirname,"vendor","${baseName}",process.arch+"-"+process.platform,"${moduleName}");`,
+        `return ${REQ}(d)`,
+        `}catch{return ${REQ}(${JSON.stringify(modulePath)})}`,
         '})()'
       ].join('');
       replacements.push({ start: node.start, end: node.end, replacement: vendorRequire });
@@ -194,7 +196,7 @@ export function astPatch(code) {
           // P5b: inject binary availability check after the env-check if-statement
           // Uses "which" on unix, "where" on windows. If both bfs+ugrep are
           // found, shadow mode proceeds; otherwise DP() returns false → Tool mode.
-          const binCheck = 'if(typeof globalThis.__dpBinOk>"u"){try{let _wc=process.platform==="win32"?"where":"which";require("child_process").execFileSync(_wc,["bfs"],{encoding:"utf8",timeout:2e3});require("child_process").execFileSync(_wc,["ugrep"],{encoding:"utf8",timeout:2e3});globalThis.__dpBinOk=!0}catch{globalThis.__dpBinOk=!1}}if(!globalThis.__dpBinOk)return!1;';
+          const binCheck = `if(typeof globalThis.__dpBinOk>"u"){try{let _wc=process.platform==="win32"?"where":"which";${REQ}("child_process").execFileSync(_wc,["bfs"],{encoding:"utf8",timeout:2e3});${REQ}("child_process").execFileSync(_wc,["ugrep"],{encoding:"utf8",timeout:2e3});globalThis.__dpBinOk=!0}catch{globalThis.__dpBinOk=!1}}if(!globalThis.__dpBinOk)return!1;`;
           replacements.push({
             start: s1.end,
             end: s1.end,
@@ -239,7 +241,7 @@ export function astPatch(code) {
         // and overwrites M (the fallback path variable).
         const returnIdx = code.indexOf('return[', node.start);
         if (returnIdx !== -1 && returnIdx < node.end) {
-          const injection = `try{let _wc=process.platform==="win32"?"where":"which",_w=require("child_process").execFileSync(_wc,[${paramTarget}],{encoding:"utf8",timeout:2e3}).trim();if(_w&&require("fs").existsSync(_w))M=_w}catch{}`;
+          const injection = `try{let _wc=process.platform==="win32"?"where":"which",_w=${REQ}("child_process").execFileSync(_wc,[${paramTarget}],{encoding:"utf8",timeout:2e3}).trim();if(_w&&${REQ}("fs").existsSync(_w))M=_w}catch{}`;
           replacements.push({ start: returnIdx, end: returnIdx, replacement: injection });
           stats.p8 = true;
         }
