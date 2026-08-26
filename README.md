@@ -37,15 +37,15 @@ The official binary has changed shape twice, so the pipeline detects which one i
 | Layout | Versions | Shape |
 |--------|----------|-------|
 | `single-cjs` | ≤ 2.1.241 | One ~28MB CommonJS bundle, patched as a single `cli.js` |
-| `split-esm` | ≥ 2.1.242 | A ~19KB ESM entry plus ~1385 `chunk-*.js` modules importing each other through Bun's virtual filesystem (`/$bunfs/root/`, or `B:/~BUN/root/` on Windows) |
+| `split-esm` | ≥ 2.1.242 | A ~19KB ESM entry plus ~1400 code-split modules (`chunk-*.js`, joined by `_N.js` names since 2.1.246) importing each other through Bun's virtual filesystem (`/$bunfs/root/`, or `B:/~BUN/root/` on Windows) |
 
 Split builds are patched directory-wide by `scripts/esm-split-patch.mjs`:
 
 | Rewrite | Description |
 |---------|-------------|
 | E1 | Import specifiers `"/$bunfs/root/chunk-x.js"` → relative `"./chunk-x.js"` (~110k per platform), so Node's ESM resolver finds the chunks shipped next to `cli.js` |
-| E2 | The ~258 remaining virtual-filesystem literals are runtime paths, not specifiers: native modules resolve through `globalThis.__ccVendorNode()` to the package's `vendor/` copy; assets (mermaid, chart.js, highlight.js, the HTML payload template) and the hooks worker resolve through `globalThis.__ccAsset()` |
-| E3 | `import.meta.require` (Bun-only) → `createRequire(import.meta.url)` |
+| E2 | The remaining virtual-filesystem literals (~258 at 2.1.242, ~424 at 2.1.246) are runtime paths, not specifiers: native modules resolve through `globalThis.__ccVendorNode()` to the package's `vendor/` copy; assets (mermaid, chart.js, highlight.js, the HTML payload template, and since 2.1.246 embedded `.md`/`.txt` prompt files) and the hooks worker resolve through `globalThis.__ccAsset()` |
+| E3 | `import.meta.require` (Bun-only) → a `createRequire` wrapper that returns file *content* for `.md`/`.txt` paths, matching Bun's text loader — since 2.1.246 chunks `require()` embedded prompt files and would otherwise crash at startup compiling markdown as JS |
 | E4 | The P6 polyfill ships as `bun-polyfill.mjs`, imported first by `cli.js` and by the hooks worker so `globalThis.Bun` exists before any chunk body runs |
 
 The patches below still apply to split builds. Only the few chunks carrying their marker strings are AST-walked — parsing all 1385 modules would cost minutes per platform.
@@ -104,7 +104,8 @@ On `split-esm` builds (2.1.242+) the entry is joined by the rest of the module t
 ```
 cli.js              ESM entry point
 bun-polyfill.mjs    Bun API shim, imported first
-chunk-*.js          ~1385 code-split modules
+chunk-*.js, _*.js   ~1400 code-split modules
+*.md, *.txt         Embedded prompt texts (since 2.1.246)
 mermaid.min.js      Assets loaded at runtime
 chart.umd.min.js
 hljsBundle.generated.min.js
@@ -124,6 +125,9 @@ Fork changes on top of upstream:
 
 - Support the flattened Bun SEA layout introduced in v2.1.229 (`cli.js` moved from `src/entrypoints/` to the extract root) — this is what stalls upstream builds from v2.1.229 on
 - Support the split-ESM layout introduced in v2.1.242 (one CJS bundle replaced by an ESM entry plus ~1385 chunks) — see [Bundle layouts](#bundle-layouts)
+- Bun text-loader semantics for `require()` of embedded `.md`/`.txt` prompt assets — without this, ≥ 2.1.246 crashes at startup (see E3)
+- Daily scheduled build (00:00 UTC) that auto-detects and releases new upstream versions
+- CI verify step fails on startup crashes (`pipefail` — a crash behind `| head` used to pass) and smoke-tests `mcp list`
 - Retry binary downloads on transient CDN errors (`curl --retry`)
 - npm publish job removed from the release workflow
 
