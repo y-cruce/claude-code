@@ -88,6 +88,7 @@ jobs:
           npm install --omit=optional --no-audit --no-fund
           node cli.js --version
           node cli.js --help | head -5
+          node cli.js mcp list
 
           rm -rf "$VERIFY"
 
