@@ -70,6 +70,7 @@ jobs:
 
       - name: Verify main package
         run: |
+          set -o pipefail
           DIST="./dist/${{ matrix.version }}"
           VERIFY=/tmp/verify-main
 

@@ -99,10 +99,16 @@ export function rewriteBunfsPaths(code, prefix) {
 }
 
 // Bun exposes import.meta.require; Node needs createRequire.
+// Bun's require also returns file CONTENT for text-loader assets (.md/.txt,
+// used since 2.1.246 for embedded prompts), so those go through readFileSync.
+// Object.assign keeps require.resolve/cache available on the wrapper.
 export function patchImportMetaRequire(code) {
   if (!code.includes('import.meta.require')) return { code, patched: false };
   const inject = 'import{createRequire as __ccMakeRequire}from"module";'
-    + 'const __ccRequire=__ccMakeRequire(import.meta.url);';
+    + 'import{readFileSync as __ccReadAsset}from"fs";'
+    + 'const __ccRawRequire=__ccMakeRequire(import.meta.url);'
+    + 'const __ccRequire=Object.assign((id)=>/\\.(md|txt)$/.test(id)'
+    + '?__ccReadAsset(id,"utf8"):__ccRawRequire(id),__ccRawRequire);';
   const at = firstStatementStart(code);
   code = code.slice(0, at) + inject + code.slice(at);
   code = code.replaceAll('import.meta.require', '__ccRequire');
