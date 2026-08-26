@@ -6,8 +6,21 @@ Starting from v2.1.113, Anthropic ships Claude Code as native Bun binaries inste
 
 ## Install
 
+Not published to npm. Install from this repo's GitHub Releases — the main package plus the package for your platform:
+
 ```bash
-npm install -g @cometix/anthropic-cc
+VERSION=$(gh release view --repo y-cruce/claude-code --json tagName --jq '.tagName | ltrimstr("v")')
+PLATFORM=darwin-arm64  # or darwin-x64 / linux-{x64,arm64}[-musl] / win32-{x64,arm64} / android-arm64
+gh release download "v$VERSION" --repo y-cruce/claude-code \
+  -p "cometix-anthropic-cc-$VERSION.tgz" \
+  -p "cometix-anthropic-cc-$PLATFORM-$VERSION.tgz"
+npm install -g "./cometix-anthropic-cc-$VERSION.tgz" "./cometix-anthropic-cc-$PLATFORM-$VERSION.tgz"
+```
+
+The CLI installs as `anthropic-cc`. If npm's allow-scripts gate skips the postinstall (it copies the platform package's module tree into the main package), finish it manually:
+
+```bash
+cd "$(npm root -g)/@cometix/anthropic-cc" && node install.cjs
 ```
 
 ## What it does
@@ -101,16 +114,10 @@ src/plugins/functionHooks/hooks-worker/hooks-worker.js
 
 ## Releases (this fork)
 
-This fork does **not** publish to npm. Builds are triggered manually and produce GitHub Release artifacts only:
+This fork does **not** publish to npm — builds produce GitHub Release artifacts only (see [Install](#install)). A scheduled run at 00:00 UTC daily picks up new upstream versions automatically; a specific version can also be built manually:
 
 ```bash
 gh workflow run release.yml -f version=<x.y.z>
-```
-
-Install locally from the release tarballs (main package + your platform package):
-
-```bash
-npm install -g ./cometix-anthropic-cc-<platform>-<x.y.z>.tgz ./cometix-anthropic-cc-<x.y.z>.tgz
 ```
 
 Fork changes on top of upstream:
