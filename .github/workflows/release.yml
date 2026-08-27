@@ -7,6 +7,12 @@ on:
     # fires while the repo is part of the upstream fork network — it needs
     # either "Leave fork network" or an external workflow_dispatch trigger.
     - cron: '13 0 * * *'
+  # Touching .release-trigger starts a run. This is how the daily cloud routine
+  # kicks off a build: its GitHub integration can write files but cannot call
+  # the workflow_dispatch API (403 "not accessible by integration").
+  push:
+    paths:
+      - '.release-trigger'
   workflow_dispatch:
     inputs:
       version:
