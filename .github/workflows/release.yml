@@ -3,10 +3,10 @@ name: Release
 on:
   schedule:
     # Daily at 00:13 UTC (08:13 UTC+8); auto-detects and releases new upstream versions.
-    # Off the top of the hour — GitHub drops congested exact-hour crons.
+    # NOTE: GitHub disables scheduled workflows in public forks, so this never
+    # fires while the repo is part of the upstream fork network — it needs
+    # either "Leave fork network" or an external workflow_dispatch trigger.
     - cron: '13 0 * * *'
-    # TEMP: verify the schedule fires at all; remove after the first run
-    - cron: '25 3 * * *'
   workflow_dispatch:
     inputs:
       version:
