@@ -2,8 +2,11 @@ name: Release
 
 on:
   schedule:
-    # Daily at 00:00 UTC (08:00 UTC+8); auto-detects and releases new upstream versions
-    - cron: '0 0 * * *'
+    # Daily at 00:13 UTC (08:13 UTC+8); auto-detects and releases new upstream versions.
+    # Off the top of the hour — GitHub drops congested exact-hour crons.
+    - cron: '13 0 * * *'
+    # TEMP: verify the schedule fires at all; remove after the first run
+    - cron: '25 3 * * *'
   workflow_dispatch:
     inputs:
       version:
