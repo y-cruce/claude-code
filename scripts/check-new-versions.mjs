@@ -11,10 +11,19 @@ export async function checkNewVersions({ existing = [] } = {}) {
   const allVersions = JSON.parse(allVersionsRaw);
   const existingSet = new Set(existing);
 
+  // Only ever the single newest upstream version: this fork republishes the
+  // current release, not the whole back catalogue. Without this the first
+  // auto-detected run builds every unreleased version since 2.1.113.
+  const newestExisting = existing
+    .filter(v => semver.valid(v))
+    .sort(semver.rcompare)[0];
+
   const candidates = allVersions
     .filter(v => semver.gte(v, FIRST_SEA_VERSION))
     .filter(v => !existingSet.has(v))
-    .sort(semver.compare);
+    .filter(v => !newestExisting || semver.gt(v, newestExisting))
+    .sort(semver.compare)
+    .slice(-1);
 
   // Verify each candidate is actually a SEA version
   // (has platform optionalDeps, not @img/sharp-*)
