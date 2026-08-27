@@ -607,6 +607,87 @@ if (typeof globalThis.Bun === "undefined") {
     embeddedFiles: [],
   };
 
+  // Fix axios env-proxy handling for HTTPS targets.
+  // The bundled axios (used by e.g. `claude remote-control` environment
+  // registration) implements HTTP(S)_PROXY by sending a *plain HTTP* request
+  // to the proxy with the absolute target URL as the path — it never opens a
+  // CONNECT tunnel. The proxy forwards that plaintext to port 443 and the
+  // origin answers "400 The plain HTTP request was sent to HTTPS port".
+  // Only axios's proxy mode produces http.request calls whose path is an
+  // absolute https:// URL, so reissue exactly those as real HTTPS requests
+  // tunneled through the proxy via CONNECT.
+  try {
+    const tls = require("tls");
+    const _tunnelAgents = new Map();
+
+    function _tunnelAgentFor(proxyHost, proxyPort, proxyAuth) {
+      const key = `${proxyHost}:${proxyPort}:${proxyAuth || ""}`;
+      let agent = _tunnelAgents.get(key);
+      if (agent) return agent;
+      agent = new https.Agent({ keepAlive: false });
+      agent.createConnection = (opts, cb) => {
+        const connectReq = http.request({
+          host: proxyHost,
+          port: proxyPort,
+          method: "CONNECT",
+          path: `${opts.host}:${opts.port}`,
+          headers: {
+            host: `${opts.host}:${opts.port}`,
+            ...(proxyAuth ? { "proxy-authorization": proxyAuth } : {}),
+          },
+        });
+        connectReq.once("connect", (res, socket) => {
+          if (res.statusCode !== 200) {
+            socket.destroy();
+            cb(new Error(`Proxy CONNECT to ${opts.host}:${opts.port} failed: ${res.statusCode}`));
+            return;
+          }
+          const tlsSocket = tls.connect(
+            { socket, servername: opts.servername || opts.host },
+            () => cb(null, tlsSocket),
+          );
+          tlsSocket.once("error", cb);
+        });
+        connectReq.once("error", cb);
+        connectReq.end();
+      };
+      _tunnelAgents.set(key, agent);
+      return agent;
+    }
+
+    const _httpRequest = http.request;
+    http.request = function (...args) {
+      const opts = args[0];
+      if (opts && typeof opts === "object" && typeof opts.path === "string"
+          && opts.path.startsWith("https://")) {
+        let target;
+        try { target = new URL(opts.path); } catch {}
+        if (target) {
+          const headers = { ...(opts.headers || {}) };
+          let proxyAuth;
+          for (const k of Object.keys(headers)) {
+            if (k.toLowerCase() === "proxy-authorization") {
+              proxyAuth = headers[k];
+              delete headers[k];
+            }
+          }
+          const fixed = {
+            ...opts,
+            protocol: "https:",
+            host: target.hostname,
+            hostname: target.hostname,
+            port: target.port || 443,
+            path: target.pathname + target.search,
+            headers,
+            agent: _tunnelAgentFor(opts.hostname || opts.host, opts.port || 80, proxyAuth),
+          };
+          return https.request(fixed, ...args.slice(1));
+        }
+      }
+      return _httpRequest.apply(this, args);
+    };
+  } catch {}
+
   // Patch ws.WebSocket: convert Bun-style {proxy: url} to Node-style {agent: HttpsProxyAgent}
   // Bun's ws natively supports a `proxy` option; Node's ws does not.
   // Without this, WebSocket connections (e.g. voice_stream) bypass HTTPS_PROXY.
