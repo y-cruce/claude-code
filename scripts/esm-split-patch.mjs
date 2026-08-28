@@ -98,17 +98,114 @@ export function rewriteBunfsPaths(code, prefix) {
   return { code, specifiers, literals };
 }
 
+// E5: since 2.1.250 chunks call import.meta.require on SIBLING CHUNKS, often
+// at top level and inside import cycles. Node's require(esm) throws
+// ERR_REQUIRE_CYCLE_MODULE while the target's graph is still evaluating, but
+// returns the namespace from cache once the target has finished. A bare
+// static import per required chunk forces exactly that: the target evaluates
+// before this module's body, and the original require becomes a cache hit.
+// Requires inside functions are left alone on purpose — they run after
+// startup (or conditionally), where plain require(esm) already works.
+const FN_TYPES = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression']);
+
+function isChunkRequire(node) {
+  if (node.type !== 'CallExpression' ||
+      node.callee?.type !== 'MemberExpression' ||
+      node.callee.object?.type !== 'MetaProperty' ||
+      node.callee.property?.name !== 'require' ||
+      node.arguments?.length !== 1) return null;
+  // after E2 the argument reads globalThis.__ccAsset("chunk-x.js")
+  const arg = node.arguments[0];
+  if (arg?.type !== 'CallExpression' ||
+      arg.callee?.type !== 'MemberExpression' ||
+      arg.callee.object?.name !== 'globalThis' ||
+      arg.callee.property?.name !== '__ccAsset' ||
+      arg.arguments?.[0]?.type !== 'Literal') return null;
+  const target = arg.arguments[0].value;
+  return typeof target === 'string' && target.endsWith('.js') ? target : null;
+}
+
+export function hoistTopLevelChunkRequires(code, prefix) {
+  if (!code.includes('import.meta.require')) return { code, hoisted: 0 };
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  const targets = new Set();
+
+  (function visit(node, inFn) {
+    if (!inFn) {
+      const target = isChunkRequire(node);
+      if (target) targets.add(target);
+    }
+    for (const key of Object.keys(node)) {
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const item of child) {
+          if (item && typeof item.type === 'string') visit(item, inFn || FN_TYPES.has(item.type));
+        }
+      } else if (child && typeof child.type === 'string') {
+        visit(child, inFn || FN_TYPES.has(child.type));
+      }
+    }
+  })(ast, false);
+
+  if (targets.size === 0) return { code, hoisted: 0 };
+  const imports = [...targets].map((t) => `import${JSON.stringify(prefix + t)};`).join('');
+  const at = ast.body.length > 0 ? ast.body[0].start : code.length;
+  return { code: code.slice(0, at) + imports + code.slice(at), hoisted: targets.size };
+}
+
 // Bun exposes import.meta.require; Node needs createRequire.
 // Bun's require also returns file CONTENT for text-loader assets (.md/.txt,
 // used since 2.1.246 for embedded prompts), so those go through readFileSync.
 // Object.assign keeps require.resolve/cache available on the wrapper.
+//
+// Since 2.1.250 chunks also require() OTHER CHUNKS at top level (hundreds of
+// sites). Node's require(esm) refuses modules whose graph is still mid-
+// evaluation in an import cycle (ERR_REQUIRE_CYCLE_MODULE) where Bun
+// re-enters evaluation and returns the namespace. Node cannot re-enter, so:
+// - require in a cycle → lazy NAMESPACE proxy (re-requires on first access,
+//   which succeeds once the cycle has finished evaluating);
+// - property read on that proxy while the cycle is STILL evaluating (the
+//   top-level `var X=require(chunk).Prop` pattern) → lazy VALUE proxy,
+//   cached per (module, prop) so every grabber gets the identical object
+//   and === comparisons between them keep working.
 export function patchImportMetaRequire(code) {
   if (!code.includes('import.meta.require')) return { code, patched: false };
   const inject = 'import{createRequire as __ccMakeRequire}from"module";'
     + 'import{readFileSync as __ccReadAsset}from"fs";'
     + 'const __ccRawRequire=__ccMakeRequire(import.meta.url);'
-    + 'const __ccRequire=Object.assign((id)=>/\\.(md|txt)$/.test(id)'
-    + '?__ccReadAsset(id,"utf8"):__ccRawRequire(id),__ccRawRequire);';
+    + 'globalThis.__ccLazyVals??=new Map();'
+    + 'const __ccLazyVal=(id,p)=>{const k=id+"\\0"+p,m=globalThis.__ccLazyVals;'
+    + 'if(m.has(k))return m.get(k);'
+    + 'let v,ok=!1;const g=()=>{if(!ok){v=__ccRawRequire(id)[p];ok=!0}return v};'
+    // target must be callable (grabbed values include functions) and free of
+    // non-configurable own props (proxy invariants) — an arrow fn is both
+    + 'const px=new Proxy(()=>{},{get:(_,q)=>g()?.[q],'
+    + 'apply:(_,th,a)=>Reflect.apply(g(),th,a),'
+    + 'has:(_,q)=>{const t=g();return t!=null&&q in t},'
+    + 'ownKeys:()=>{const t=g();return t==null?[]:Reflect.ownKeys(t)},'
+    + 'getOwnPropertyDescriptor:(_,q)=>{const t=g(),'
+    + 'd=t==null?void 0:Reflect.getOwnPropertyDescriptor(t,q);'
+    + 'if(d)d.configurable=!0;return d},'
+    + 'getPrototypeOf:()=>{const t=g();return t==null?null:Reflect.getPrototypeOf(Object(t))}});'
+    + 'm.set(k,px);return px};'
+    + 'const __ccLazyNs=(id)=>{let n=null;const r=()=>n??(n=__ccRawRequire(id));'
+    + 'return new Proxy({},{'
+    + 'get:(_,p)=>{const m=globalThis.__ccLazyVals;'
+    + 'if(typeof p==="string"&&m.has(id+"\\0"+p))return m.get(id+"\\0"+p);'
+    + 'try{return r()[p]}catch(e){'
+    + 'if(e&&e.code==="ERR_REQUIRE_CYCLE_MODULE"){'
+    + 'if(typeof p!=="string"||p==="then")return;return __ccLazyVal(id,p)}'
+    + 'throw e}},'
+    + 'has:(_,p)=>p in r(),'
+    + 'ownKeys:()=>Reflect.ownKeys(r()),'
+    + 'getOwnPropertyDescriptor:(_,p)=>{const d=Reflect.getOwnPropertyDescriptor(r(),p);'
+    + 'if(d)d.configurable=!0;return d},'
+    + 'getPrototypeOf:()=>Reflect.getPrototypeOf(r())})};'
+    + 'const __ccRequire=Object.assign((id)=>{'
+    + 'if(/\\.(md|txt)$/.test(id))return __ccReadAsset(id,"utf8");'
+    + 'try{return __ccRawRequire(id)}catch(e){'
+    + 'if(e&&e.code==="ERR_REQUIRE_CYCLE_MODULE")return __ccLazyNs(id);'
+    + 'throw e}},__ccRawRequire);';
   const at = firstStatementStart(code);
   code = code.slice(0, at) + inject + code.slice(at);
   code = code.replaceAll('import.meta.require', '__ccRequire');
@@ -117,7 +214,7 @@ export function patchImportMetaRequire(code) {
 
 export async function patchSplitEsm({ extractDir, entryPath }) {
   const files = await listJsFiles(extractDir);
-  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, ast: {} };
+  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, hoisted: 0, ast: {} };
 
   for (const file of files) {
     let code = await readFile(file, 'utf8');
@@ -127,6 +224,10 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     code = rewritten.code;
     stats.specifiers += rewritten.specifiers;
     stats.literals += rewritten.literals;
+
+    const hoist = hoistTopLevelChunkRequires(code, prefixFor(file, extractDir));
+    code = hoist.code;
+    stats.hoisted += hoist.hoisted;
 
     const meta = patchImportMetaRequire(code);
     code = meta.code;

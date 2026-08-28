@@ -235,7 +235,7 @@ export async function fetchAndProcess({
       // v2.1.242+: patch the whole extract directory in place
       const st = await patchSplitEsm({ extractDir, entryPath: cliSrc });
       console.log(`  ✓ ${platform} — ${st.files} modules, ${st.specifiers} specifiers, ${st.literals} runtime paths`);
-      console.log(`    patches: ${JSON.stringify(st.ast)}, import.meta.require: ${st.metaRequire}, polyfill entries: ${st.polyfillEntries}`);
+      console.log(`    patches: ${JSON.stringify(st.ast)}, import.meta.require: ${st.metaRequire}, hoisted chunk imports: ${st.hoisted}, polyfill entries: ${st.polyfillEntries}`);
       extractions[platform] = { extractDir, layout, entryPath: cliSrc, binPath };
     } else {
       // Patch cli.js
