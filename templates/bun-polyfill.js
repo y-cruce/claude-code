@@ -452,6 +452,25 @@ if (typeof globalThis.Bun === "undefined") {
       return bunHash(data, seed);
     },
 
+    // Since 2.1.251 embedded text assets ship zstd-compressed (*.md.zst);
+    // Node has zstd in zlib since 22.15 / 23.8
+    zstdDecompressSync: (data) => {
+      const zlib = require("zlib");
+      if (typeof zlib.zstdDecompressSync !== "function") {
+        throw new Error("Bun.zstdDecompressSync polyfill needs zlib zstd support (Node >= 22.15)");
+      }
+      return zlib.zstdDecompressSync(data);
+    },
+
+    zstdDecompress: (data) => new Promise((resolve, reject) => {
+      const zlib = require("zlib");
+      if (typeof zlib.zstdDecompress !== "function") {
+        reject(new Error("Bun.zstdDecompress polyfill needs zlib zstd support (Node >= 22.15)"));
+        return;
+      }
+      zlib.zstdDecompress(data, (err, out) => (err ? reject(err) : resolve(out)));
+    }),
+
     deepEquals,
 
     stripANSI: (str) => {
