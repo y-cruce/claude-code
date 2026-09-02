@@ -2,11 +2,11 @@ name: Release
 
 on:
   schedule:
-    # Daily at 00:13 UTC (08:13 UTC+8); auto-detects and releases new upstream versions.
+    # Daily at 22:13 UTC (06:13 UTC+8 next day); auto-detects and releases new upstream versions.
     # NOTE: GitHub disables scheduled workflows in public forks, so this never
     # fires while the repo is part of the upstream fork network — it needs
     # either "Leave fork network" or an external workflow_dispatch trigger.
-    - cron: '13 0 * * *'
+    - cron: '13 22 * * *'
   # Touching .release-trigger starts a run. This is how the daily cloud routine
   # kicks off a build: its GitHub integration can write files but cannot call
   # the workflow_dispatch API (403 "not accessible by integration").

@@ -123,7 +123,7 @@ src/plugins/functionHooks/hooks-worker/hooks-worker.js
 
 ## Releases (this fork)
 
-This fork does **not** publish to npm — builds produce GitHub Release artifacts only (see [Install](#install)). A scheduled run at 00:00 UTC daily picks up new upstream versions automatically; a specific version can also be built manually:
+This fork does **not** publish to npm — builds produce GitHub Release artifacts only (see [Install](#install)). A scheduled run at 22:13 UTC daily picks up new upstream versions automatically; a specific version can also be built manually:
 
 ```bash
 gh workflow run release.yml -f version=<x.y.z>
