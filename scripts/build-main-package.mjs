@@ -22,6 +22,7 @@ export async function buildMainPackage({
   await mkdir(outputDir, { recursive: true });
 
   // 1. package.json
+  const sharpVersion = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')).dependencies.sharp;
   const optDeps = {};
   for (const p of ALL_PLATFORMS) {
     optDeps[`@cometix/anthropic-cc-${p}`] = version;
@@ -50,15 +51,15 @@ export async function buildMainPackage({
     },
     optionalDependencies: {
       ...optDeps,
-      '@img/sharp-darwin-arm64': '^0.34.2',
-      '@img/sharp-darwin-x64': '^0.34.2',
-      '@img/sharp-linux-arm': '^0.34.2',
-      '@img/sharp-linux-arm64': '^0.34.2',
-      '@img/sharp-linux-x64': '^0.34.2',
-      '@img/sharp-linuxmusl-arm64': '^0.34.2',
-      '@img/sharp-linuxmusl-x64': '^0.34.2',
-      '@img/sharp-win32-arm64': '^0.34.2',
-      '@img/sharp-win32-x64': '^0.34.2',
+      '@img/sharp-darwin-arm64': sharpVersion,
+      '@img/sharp-darwin-x64': sharpVersion,
+      '@img/sharp-linux-arm': sharpVersion,
+      '@img/sharp-linux-arm64': sharpVersion,
+      '@img/sharp-linux-x64': sharpVersion,
+      '@img/sharp-linuxmusl-arm64': sharpVersion,
+      '@img/sharp-linuxmusl-x64': sharpVersion,
+      '@img/sharp-win32-arm64': sharpVersion,
+      '@img/sharp-win32-x64': sharpVersion,
     },
     files: [
       'cli.js',

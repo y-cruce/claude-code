@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as acorn from 'acorn';
+import { build } from 'esbuild';
 import { astPatch } from './node-compat-patch.mjs';
 import { BASE_PATH_POSIX, BASE_PATH_WINDOWS } from './bun-sea-extract.mjs';
 
@@ -212,9 +213,38 @@ export function patchImportMetaRequire(code) {
   return { code, patched: true };
 }
 
+// E6: replace only the Worker whose URL provider names the hooks entry.
+// Other libraries probe global Worker to choose their Node fallback.
+export function patchHooksWorker(code) {
+  if (!code.includes('HOOKS_WORKER_URL') || !code.includes('Worker')) return { code, patched: 0 };
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  const providers = new Set();
+  const workers = [];
+  (function visit(node) {
+    const binding = node.type === 'VariableDeclarator' ? node.init
+      : node.type === 'FunctionDeclaration' ? node.body : null;
+    if (binding && node.id?.type === 'Identifier') {
+      const source = code.slice(binding.start, binding.end);
+      if (source.includes('HOOKS_WORKER_URL') && source.includes('hooks-worker.js')) providers.add(node.id.name);
+    }
+    if (node.type === 'NewExpression' && node.callee.name === 'Worker') workers.push(node);
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) visit(item);
+      } else if (child?.type) visit(child);
+    }
+  })(ast);
+  const matches = workers.filter((node) => node.arguments[0]?.type === 'CallExpression'
+    && providers.has(node.arguments[0].callee.name));
+  for (const node of matches.reverse()) {
+    code = code.slice(0, node.callee.start) + 'globalThis.__ccHooksWorker' + code.slice(node.callee.end);
+  }
+  return { code, patched: matches.length };
+}
+
 export async function patchSplitEsm({ extractDir, entryPath }) {
   const files = await listJsFiles(extractDir);
-  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, hoisted: 0, ast: {} };
+  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, hoisted: 0, hooksWorkers: 0, ast: {} };
 
   for (const file of files) {
     let code = await readFile(file, 'utf8');
@@ -224,6 +254,10 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     code = rewritten.code;
     stats.specifiers += rewritten.specifiers;
     stats.literals += rewritten.literals;
+
+    const hooksWorker = patchHooksWorker(code);
+    code = hooksWorker.code;
+    stats.hooksWorkers += hooksWorker.patched;
 
     const hoist = hoistTopLevelChunkRequires(code, prefixFor(file, extractDir));
     code = hoist.code;
@@ -260,6 +294,27 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     if (code !== before) await writeFile(file, code);
   }
 
+  const workerEntries = files.filter((f) => f.endsWith('hooks-worker.js'));
+  if (workerEntries.length > 0 && stats.hooksWorkers !== 1) {
+    throw new Error(`expected one hooks Worker creation site, patched ${stats.hooksWorkers}`);
+  }
+
+  // Bundle JS helpers at build time; native sharp stays in the existing @img packages.
+  await build({
+    absWorkingDir: join(__dirname, '..'),
+    entryPoints: {
+      'bun-transpiler-compat': join(__dirname, '..', 'templates', 'bun-transpiler-compat.cjs'),
+      'bun-toml-compat': 'smol-toml',
+      'bun-sharp-compat': 'sharp',
+    },
+    outdir: extractDir,
+    outExtension: { '.js': '.cjs' },
+    bundle: true, platform: 'node', format: 'cjs', target: 'node22', minify: true,
+    external: ['@img/*'],
+  });
+  await writeFile(join(extractDir, 'bun-image-compat.cjs'),
+    readFileSync(join(__dirname, '..', 'templates', 'bun-image-compat.cjs')));
+
   // Bun polyfill, ESM-wrapped, next to the entry
   let polyfill = readFileSync(join(__dirname, '..', 'templates', 'bun-polyfill.js'), 'utf8');
   polyfill = polyfill.replace(/^#![^\n]*\n/, '');
@@ -267,7 +322,6 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
 
   // The polyfill has to be the entry's first import so that globalThis.Bun
   // exists before any chunk body runs. Worker entrypoints need it too.
-  const workerEntries = files.filter((f) => f.endsWith('hooks-worker.js'));
   for (const entry of [entryPath, ...workerEntries]) {
     let code = await readFile(entry, 'utf8');
     const at = firstStatementStart(code);

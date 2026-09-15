@@ -12,6 +12,66 @@ if (typeof globalThis.Bun === "undefined") {
   const { Readable } = require("stream");
   const util = require("util");
 
+  // Only the hooks Worker creation site is rewritten to this adapter.
+  // Leave global Worker absent so node-forge keeps its Node fallbacks.
+  const { Worker: NodeWorker, isMainThread, parentPort } = require("node:worker_threads");
+  globalThis.ErrorEvent ??= class ErrorEvent extends Event {
+    constructor(type, init = {}) {
+      super(type);
+      this.message = init.message || "";
+      this.error = init.error;
+    }
+  };
+  globalThis.__ccHooksWorker = class HooksWorker extends EventTarget {
+    constructor(url, options = {}) {
+      super();
+      // Parent process flags (e.g. --use-system-ca) may be invalid for a Worker.
+      const execArgv = options.execArgv ?? [];
+      this._stopped = false;
+      this._worker = new NodeWorker(url, {
+        ...options,
+        execArgv: execArgv.includes("--experimental-vm-modules")
+          ? execArgv : [...execArgv, "--experimental-vm-modules"],
+      });
+      const fail = (error) => {
+        if (this._stopped) return;
+        this._stopped = true;
+        this.dispatchEvent(new ErrorEvent("error", { message: error.message, error }));
+      };
+      this._worker.on("message", (data) => this.dispatchEvent(new MessageEvent("message", { data })));
+      this._worker.on("messageerror", (error) => fail(error));
+      this._worker.on("error", fail);
+      this._worker.on("exit", (code) => fail(new Error(`hooks worker exited unexpectedly (code ${code})`)));
+    }
+    postMessage(value, transfer) { this._worker.postMessage(value, transfer); }
+    terminate() { this._stopped = true; return this._worker.terminate(); }
+    ref() { this._worker.ref(); return this; }
+    unref() { this._worker.unref(); return this; }
+    get onmessage() { return this._onmessage ?? null; }
+    set onmessage(fn) {
+      if (this._onmessage) this.removeEventListener("message", this._onmessage);
+      this._onmessage = fn;
+      if (fn) this.addEventListener("message", fn);
+    }
+    get onerror() { return this._onerror ?? null; }
+    set onerror(fn) {
+      if (this._onerror) this.removeEventListener("error", this._onerror);
+      this._onerror = fn;
+      if (fn) this.addEventListener("error", fn);
+    }
+  };
+  if (!isMainThread && parentPort) {
+    globalThis.self = globalThis;
+    globalThis.postMessage = (value, transfer) => parentPort.postMessage(value, transfer);
+    globalThis.addEventListener = parentPort.addEventListener.bind(parentPort);
+    globalThis.removeEventListener = parentPort.removeEventListener.bind(parentPort);
+    Object.defineProperty(globalThis, "onmessage", {
+      configurable: true,
+      get: () => parentPort.onmessage,
+      set: (fn) => { parentPort.onmessage = fn; },
+    });
+  }
+
   const BUN_FILE = Symbol.for("bun.polyfill.file");
 
   // ──────────────────────────────────────────────
@@ -1131,6 +1191,8 @@ if (typeof globalThis.Bun === "undefined") {
     }
   }
 
+  const sleepCell = new Int32Array(new SharedArrayBuffer(4));
+
   globalThis.Bun = {
     version: "polyfill",
     revision: "polyfill",
@@ -1141,6 +1203,9 @@ if (typeof globalThis.Bun === "undefined") {
     isStandaloneExecutable: false,
 
     file: bunFile,
+    sleepSync: (ms) => { Atomics.wait(sleepCell, 0, 0, ms); },
+    TOML: { parse: (input) => require("./bun-toml-compat.cjs").parse(input) },
+    Image: require("./bun-image-compat.cjs"),
 
     hash: function hash(data, seed) {
       if (arguments.length === 1) return bunHash(data);
@@ -1172,6 +1237,8 @@ if (typeof globalThis.Bun === "undefined") {
       if (_inkCompat?.stripANSI) return _inkCompat.stripANSI(str);
       return typeof str === "string" ? str.replace(ANSI_RE, "") : str;
     },
+
+    sliceAnsi: (str, start, end) => _inkCompat.sliceAnsi(str, start, end),
 
     stringWidth: (str, opts) => {
       if (_inkCompat?.stringWidth) return _inkCompat.stringWidth(str);
@@ -1290,7 +1357,10 @@ if (typeof globalThis.Bun === "undefined") {
 
     Transpiler: class BunTranspilerPolyfill {
       constructor(opts = {}) { this._loader = opts.loader || "js"; }
-      transformSync(code) { return typeof code === "string" ? code : ""; }
+      transformSync(code) {
+        if (this._loader === "js") return typeof code === "string" ? code : "";
+        return require("./bun-transpiler-compat.cjs").transformSync(code, this._loader);
+      }
       scanImports(code) { return []; }
     },
 

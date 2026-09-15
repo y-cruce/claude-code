@@ -129,7 +129,7 @@ export async function buildPlatformPackage({
     os: [os],
     cpu: [cpu],
     files: layout === 'split-esm'
-      ? ['*.js', '*.mjs', '*.asset', 'src/', 'vendor/']
+      ? ['*.js', '*.mjs', '*.cjs', '*.asset', 'src/', 'vendor/']
       : ['cli.js', 'vendor/'],
     repository: { type: 'git', url: 'https://github.com/CometixSpace/claude-code.git' },
     license: 'SEE LICENSE IN README.md',
