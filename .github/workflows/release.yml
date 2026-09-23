@@ -99,6 +99,17 @@ jobs:
           node cli.js --help | head -5
           node cli.js mcp list
 
+          # Exercise interactive startup, including built-in plugin loading.
+          # The temp install has no trust record, so accept its local prompt.
+          timeout 35s bash -c '{ sleep 4; printf "\033[B\r"; sleep 30; } | \
+            script -fq -c "node cli.js" /tmp/verify-main-startup.log > /dev/null 2>&1' \
+            || [ "$?" -eq 124 ]
+          if ! grep -aq 'Opus' /tmp/verify-main-startup.log || \
+             grep -aEq 'could not start|hooks.*module.*did.*not.*load' /tmp/verify-main-startup.log; then
+            cat /tmp/verify-main-startup.log
+            exit 1
+          fi
+
           rm -rf "$VERIFY"
 
       - name: Package tarballs
@@ -183,4 +194,3 @@ jobs:
             --title "v${VERSION}" \
             --notes "$BODY" \
             artifacts/*
-

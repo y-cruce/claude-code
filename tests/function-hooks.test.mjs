@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
-import { patchHooksWorker, patchSplitEsm } from '../scripts/esm-split-patch.mjs';
+import { patchBuiltinHooksModuleShipping, patchHooksWorker, patchImportMetaDir, patchSplitEsm } from '../scripts/esm-split-patch.mjs';
 
 const host = `
 const urlOf = () => ({ HOOKS_WORKER_URL: '/tmp/hooks-worker.js' }).HOOKS_WORKER_URL;
@@ -60,6 +60,26 @@ test('only hooks constructor changes; forge guards and fallback results remain u
   const restored = await import(pathToFileURL(join(root, 'cli.js')));
   assert.equal(restored.cores(), original.cores());
   assert.equal(restored.prime(), original.prime());
+});
+
+test('built-in hooks receive a real module path and shipped content on Node', async () => {
+  const source = `
+import { join } from 'node:path';
+const standalone = () => false;
+const ship = (module, scan, folder) => ({ module, scan, folder });
+const hooks = (folder, module, factory) => standalone() ? ship(module, factory(), folder) : { module: module, folder: folder };
+export const register = () => {
+  const entry = hooks(import.meta.dir, 'built-in', () => 42);
+  return { path: join(entry.folder, 'register.ts'), scan: entry.scan };
+};`;
+  const directory = patchImportMetaDir(source);
+  const shipped = patchBuiltinHooksModuleShipping(directory.code);
+  assert.equal(directory.patched, 1);
+  assert.equal(shipped.patched, 1);
+  const file = join(root, 'builtin-hooks.js');
+  await writeFile(file, shipped.code);
+  const { register } = await import(pathToFileURL(file));
+  assert.deepEqual(register(), { path: join(await realpath(root), 'register.ts'), scan: 42 });
 });
 
 test('entry exists but no matching hooks constructor fails the build', async () => {

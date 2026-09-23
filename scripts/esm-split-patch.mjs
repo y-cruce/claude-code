@@ -99,6 +99,51 @@ export function rewriteBunfsPaths(code, prefix) {
   return { code, specifiers, literals };
 }
 
+// Bun names the current module directory `import.meta.dir`; Node exposes the
+// same value as `import.meta.dirname`. Leaving the Bun spelling intact makes
+// built-in hooks fail during startup when path.join receives undefined.
+export function patchImportMetaDir(code) {
+  const pattern = /import\.meta\.dir\b/g;
+  const matches = code.match(pattern);
+  if (!matches) return { code, patched: 0 };
+  return { code: code.replace(pattern, 'import.meta.dirname'), patched: matches.length };
+}
+
+export function patchBuiltinHooksModuleShipping(code) {
+  if (!code.includes('folder:')) return { code, patched: 0 };
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  const replacements = [];
+
+  (function visit(node) {
+    if (node.type === 'ConditionalExpression' &&
+        node.test?.type === 'CallExpression' && node.test.arguments.length === 0 &&
+        node.consequent?.type === 'CallExpression' && node.consequent.arguments.length === 3 &&
+        node.alternate?.type === 'ObjectExpression') {
+      const properties = node.alternate.properties;
+      const fields = new Map(properties.filter((p) => p.type === 'Property' && !p.computed)
+        .map((p) => [p.key.name ?? p.key.value, p.value]));
+      const [moduleArg, factoryCall, folderArg] = node.consequent.arguments;
+      if (properties.length === 2 && fields.size === 2 &&
+          moduleArg.type === 'Identifier' && folderArg.type === 'Identifier' &&
+          factoryCall.type === 'CallExpression' && factoryCall.arguments.length === 0 &&
+          fields.get('module')?.name === moduleArg.name &&
+          fields.get('folder')?.name === folderArg.name) {
+        replacements.push({ start: node.start, end: node.end, text: code.slice(node.consequent.start, node.consequent.end) });
+      }
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) visit(item);
+      } else if (child?.type) visit(child);
+    }
+  })(ast);
+
+  for (const replacement of replacements.reverse()) {
+    code = code.slice(0, replacement.start) + replacement.text + code.slice(replacement.end);
+  }
+  return { code, patched: replacements.length };
+}
+
 // E5: since 2.1.250 chunks call import.meta.require on SIBLING CHUNKS, often
 // at top level and inside import cycles. Node's require(esm) throws
 // ERR_REQUIRE_CYCLE_MODULE while the target's graph is still evaluating, but
@@ -244,7 +289,7 @@ export function patchHooksWorker(code) {
 
 export async function patchSplitEsm({ extractDir, entryPath }) {
   const files = await listJsFiles(extractDir);
-  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, hoisted: 0, hooksWorkers: 0, ast: {} };
+  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, ast: {} };
 
   for (const file of files) {
     let code = await readFile(file, 'utf8');
@@ -254,6 +299,14 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     code = rewritten.code;
     stats.specifiers += rewritten.specifiers;
     stats.literals += rewritten.literals;
+
+    const metaDir = patchImportMetaDir(code);
+    code = metaDir.code;
+    stats.metaDir += metaDir.patched;
+
+    const builtinHooks = patchBuiltinHooksModuleShipping(code);
+    code = builtinHooks.code;
+    stats.builtinHooks += builtinHooks.patched;
 
     const hooksWorker = patchHooksWorker(code);
     code = hooksWorker.code;
