@@ -105,7 +105,7 @@ jobs:
             env HOME=/tmp/verify-main-home script -fq -c "node cli.js" \
               /tmp/verify-main-startup.log > /dev/null 2>&1' \
             || [ "$?" -eq 124 ]
-          if ! grep -aq 'Accessing' /tmp/verify-main-startup.log || \
+          if ! grep -aq 'Welcome' /tmp/verify-main-startup.log || \
              grep -aEq 'could not start|hooks.*module.*did.*not.*load' /tmp/verify-main-startup.log; then
             cat /tmp/verify-main-startup.log
             exit 1
