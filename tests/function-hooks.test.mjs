@@ -62,6 +62,16 @@ test('only hooks constructor changes; forge guards and fallback results remain u
   assert.equal(restored.prime(), original.prime());
 });
 
+test('hooks constructor whose URL arrives as a parameter default is patched (2.1.295+)', () => {
+  const source = `
+const urlOf = () => ({ HOOKS_WORKER_URL: '/tmp/hooks-worker.js' }).HOOKS_WORKER_URL;
+function spawn(url = urlOf()) { return new Worker(url, {}); }
+function other(url) { return new Worker(url); }`;
+  const patched = patchHooksWorker(source);
+  assert.equal(patched.patched, 1);
+  assert.equal(patched.code, source.replace('new Worker(url, {})', 'new globalThis.__ccHooksWorker(url, {})'));
+});
+
 test('built-in hooks receive a real module path and shipped content on Node', async () => {
   const source = `
 import { join } from 'node:path';

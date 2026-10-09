@@ -265,22 +265,33 @@ export function patchHooksWorker(code) {
   const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
   const providers = new Set();
   const workers = [];
-  (function visit(node) {
+  (function visit(node, defaults) {
     const binding = node.type === 'VariableDeclarator' ? node.init
       : node.type === 'FunctionDeclaration' ? node.body : null;
     if (binding && node.id?.type === 'Identifier') {
       const source = code.slice(binding.start, binding.end);
       if (source.includes('HOOKS_WORKER_URL') && source.includes('hooks-worker.js')) providers.add(node.id.name);
     }
-    if (node.type === 'NewExpression' && node.callee.name === 'Worker') workers.push(node);
+    // 2.1.295+ passes the URL through a parameter default: function f(url = provider()) { new Worker(url, ...) }
+    if (node.params) {
+      defaults = new Map(defaults);
+      for (const param of node.params) {
+        if (param.type === 'AssignmentPattern' && param.left.type === 'Identifier') defaults.set(param.left.name, param.right);
+        else if (param.type === 'Identifier') defaults.delete(param.name);
+      }
+    }
+    if (node.type === 'NewExpression' && node.callee.name === 'Worker') {
+      const url = node.arguments[0];
+      workers.push({ node, url: url?.type === 'Identifier' ? defaults.get(url.name) : url });
+    }
     for (const child of Object.values(node)) {
       if (Array.isArray(child)) {
-        for (const item of child) if (item?.type) visit(item);
-      } else if (child?.type) visit(child);
+        for (const item of child) if (item?.type) visit(item, defaults);
+      } else if (child?.type) visit(child, defaults);
     }
-  })(ast);
-  const matches = workers.filter((node) => node.arguments[0]?.type === 'CallExpression'
-    && providers.has(node.arguments[0].callee.name));
+  })(ast, new Map());
+  const matches = workers.filter(({ url }) => url?.type === 'CallExpression' && providers.has(url.callee.name))
+    .map(({ node }) => node);
   for (const node of matches.reverse()) {
     code = code.slice(0, node.callee.start) + 'globalThis.__ccHooksWorker' + code.slice(node.callee.end);
   }
