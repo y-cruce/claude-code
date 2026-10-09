@@ -23,7 +23,7 @@ gh release download "v$VERSION" --repo y-cruce/claude-code \
 npm install -g "./cometix-anthropic-cc-$VERSION.tgz" "./cometix-anthropic-cc-$PLATFORM-$VERSION.tgz"
 ```
 
-The CLI installs as `anthropic-cc`. If npm's allow-scripts gate skips the postinstall (it copies the platform package's module tree into the main package), finish it manually:
+The CLI installs as `anthropic-cc`. Postinstall copies the platform tree and its runtime dependencies into a per-user directory outside npm. If npm's allow-scripts gate skips it, the first launch completes that copy automatically. To install the tree manually:
 
 ```bash
 cd "$(npm root -g)/@cometix/anthropic-cc" && node install.cjs
@@ -73,7 +73,7 @@ Applied by `scripts/node-compat-patch.mjs` — to the extracted `cli.js` (~27MB)
 | P9 | Package name rebranded: all `@anthropic-ai/claude-code` references (~250 occurrences) → `@cometix/anthropic-cc`, so the built-in auto-updater installs this package instead of the official Bun build |
 | P10 | CONNECT tunneling for axios behind `HTTP(S)_PROXY` (ships inside the P6 polyfill). The bundled axios sends HTTPS requests to the proxy as absolute-form cleartext HTTP instead of opening a CONNECT tunnel, so its clients — most visibly `claude remote-control` registration — die with `Registration: Failed with status 400` behind a proxy ([upstream bug](https://github.com/anthropics/claude-code/issues/71781), the official Bun build fails the same way). The polyfill intercepts `http.request` calls whose `path` is an absolute `https://` URL (only axios's proxy mode produces those) and reissues them as real HTTPS requests tunneled via CONNECT |
 
-Outside the patcher, the package also ships `bun-ink-compat.cjs` (precompiled ansi-regex/strip-ansi/string-width/ansi-styles/wrap-ansi for terminal text handling) and `install.cjs` (postinstall: detects platform incl. musl/Android, copies the platform package's files — `cli.js` + `vendor/`, or the whole chunk tree on split builds — into the main package).
+Outside the patcher, the package also ships `bun-ink-compat.cjs` (precompiled ansi-regex/strip-ansi/string-width/ansi-styles/wrap-ansi for terminal text handling) and `install.cjs` (postinstall: detects platform incl. musl/Android and installs an isolated runtime tree).
 
 ## Search tools
 
@@ -98,9 +98,33 @@ EMBEDDED_SEARCH_TOOLS=true claude
 
 ## Package contents
 
+The npm main package contains a small `cli.js` launcher, `install.cjs`,
+`runtime.mjs`, `bun-ink-compat.cjs` and SDK types. The launcher selects exactly
+its package version. Runtime trees live under
+`${XDG_DATA_HOME:-~/.local/share}/anthropic-cc/versions/<version>/build-<id>/`
+on macOS/Linux, or `%LOCALAPPDATA%/anthropic-cc/versions/` on Windows
+(falling back to `~/AppData/Local`). Set `ANTHROPIC_CC_DATA_DIR` to override
+the `anthropic-cc` data directory, including for temporary installs.
+
+Each build contains its own `node_modules/`, assets and binaries. Installation
+copies into a temporary sibling directory, renames the complete tree into
+place, then atomically replaces the version's `current.json` pointer. A
+same-version rebuild gets a new build directory. Running sessions and their
+background CLI processes keep their original paths; each runtime entry records
+its PID before loading Claude Code. Install-time pruning checks those PIDs,
+keeps all live builds plus the current and previous installed versions, and
+removes unused older trees. PID reuse can conservatively retain an unused tree.
+The main package carries a build ID, so a skipped postinstall for a same-version
+re-release still activates that build on the next launch.
+The first upgrade from the old in-package layout still requires restarting
+sessions launched before this isolation support was installed.
+
+Within each runtime tree:
+
 ```
-cli.js              Node.js entry point
-sdk-tools.d.ts      SDK type definitions
+cli.js              PID registration and runtime entry
+runtime-entry.js    Original Node.js entry point
+node_modules/       Private runtime dependencies (including transitive deps)
 vendor/
 ├── ripgrep/         Code search (6 platforms)
 ├── audio-capture/   Voice input (6 platforms)
@@ -110,7 +134,7 @@ vendor/
 On `split-esm` builds (2.1.242+) the entry is joined by the rest of the module tree:
 
 ```
-cli.js              ESM entry point
+runtime-entry.js    Original ESM entry point
 bun-polyfill.mjs    Bun API shim, imported first
 chunk-*.js, _*.js   ~1400 code-split modules
 *.md, *.txt         Embedded prompt texts (since 2.1.246)

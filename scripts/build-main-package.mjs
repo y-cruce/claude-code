@@ -2,6 +2,7 @@ import { mkdir, writeFile, copyFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -31,8 +32,9 @@ export async function buildMainPackage({
   const pkg = {
     name: '@cometix/anthropic-cc',
     version,
+    runtimeBuild: randomUUID(),
     bin: { 'anthropic-cc': 'cli.js' },
-    // v2.1.242+ ships ESM chunks that postinstall copies in next to cli.js
+    // The launcher and the isolated runtime use the same module type.
     ...(layout === 'split-esm' ? { type: 'module' } : {}),
     engines: { node: '>=22.0.0' },
     scripts: { postinstall: 'node install.cjs' },
@@ -64,6 +66,7 @@ export async function buildMainPackage({
     files: [
       'cli.js',
       'install.cjs',
+      'runtime.mjs',
       'bun-ink-compat.cjs',
       'sdk-tools.d.ts',
     ],
@@ -76,16 +79,17 @@ export async function buildMainPackage({
   const installTemplate = readFileSync(join(__dirname, '..', 'templates', 'install.cjs'), 'utf8');
   await writeFile(join(outputDir, 'install.cjs'), installTemplate);
   console.log('[OK] install.cjs');
+  await copyFile(join(__dirname, '..', 'templates', 'runtime.mjs'), join(outputDir, 'runtime.mjs'));
 
   // 3. bun-ink-compat.cjs (compiled ANSI/width/wrap from Anthropic source)
   const inkCompat = readFileSync(join(__dirname, '..', 'templates', 'bun-ink-compat.cjs'));
   await writeFile(join(outputDir, 'bun-ink-compat.cjs'), inkCompat);
   console.log('[OK] bun-ink-compat.cjs');
 
-  // 4. cli.js placeholder
+  // 4. Version-specific launcher
   const placeholder = readFileSync(join(__dirname, '..', 'templates', 'cli-placeholder.js'), 'utf8');
   await writeFile(join(outputDir, 'cli.js'), placeholder);
-  console.log('[OK] cli.js (placeholder)');
+  console.log('[OK] cli.js (launcher)');
 
   // 4. Copy sdk-tools.d.ts, LICENSE.md, README.md from wrapper
   if (wrapperDir) {

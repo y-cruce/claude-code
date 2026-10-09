@@ -82,27 +82,27 @@ jobs:
           set -o pipefail
           DIST="./dist/${{ matrix.version }}"
           VERIFY=/tmp/verify-main
+          export ANTHROPIC_CC_DATA_DIR=/tmp/verify-main-data
 
           # Copy main package to temp dir for verification
           cp -r "$DIST/main" "$VERIFY"
 
-          # Simulate postinstall with linux-x64 platform package.
-          # From 2.1.242 that is a whole ESM chunk tree, not just cli.js,
-          # so copy everything except the platform package.json.
-          cp "$VERIFY/package.json" /tmp/main-package.json
-          cp -R "$DIST/packages/linux-x64/." "$VERIFY/"
-          cp /tmp/main-package.json "$VERIFY/package.json"
-
           cd "$VERIFY"
-          npm install --omit=optional --no-audit --no-fund
+          npm install --ignore-scripts --omit=optional --no-audit --no-fund
+          mkdir -p node_modules/@cometix/anthropic-cc-linux-x64
+          cp -R "$GITHUB_WORKSPACE/$DIST/packages/linux-x64/." node_modules/@cometix/anthropic-cc-linux-x64/
+          # Exercise recovery after skipped postinstall, then a same-version rebuild.
           node cli.js --version
+          node install.cjs
+          RUNTIME=$(node --input-type=module -e 'import {readFileSync} from "node:fs"; import {join} from "node:path"; const dir=join(process.env.ANTHROPIC_CC_DATA_DIR,"versions",JSON.parse(readFileSync("package.json")).version); console.log(join(dir,JSON.parse(readFileSync(join(dir,"current.json"))).build));')
+          test -d "$RUNTIME/node_modules/node-pty"
           node cli.js --help | head -5
           node cli.js mcp list
 
           # Exercise interactive startup on a fresh config.
           mkdir -p /tmp/verify-main-home
           timeout 25s bash -c '{ sleep 20; } | \
-            env HOME=/tmp/verify-main-home script -fq -c "node cli.js" \
+            env HOME=/tmp/verify-main-home CLAUDE_CONFIG_DIR=/tmp/verify-main-home/config script -fq -c "node cli.js" \
               /tmp/verify-main-startup.log > /dev/null 2>&1' \
             || [ "$?" -eq 124 ]
           if ! grep -aq 'Welcome' /tmp/verify-main-startup.log || \
@@ -111,7 +111,7 @@ jobs:
             exit 1
           fi
 
-          rm -rf "$VERIFY"
+          rm -rf "$VERIFY" "$ANTHROPIC_CC_DATA_DIR"
 
       - name: Package tarballs
         run: |

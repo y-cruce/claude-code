@@ -41,16 +41,13 @@ curl -fL --retry 3 -o "$tmp/platform.tgz" "$base/cometix-anthropic-cc-$platform-
 
 npm install -g "$tmp/main.tgz" "$tmp/platform.tgz"
 
-# npm's allow-scripts gate may skip the postinstall that copies the platform
-# package's module tree into the main package — finish it manually if so.
+# npm's allow-scripts gate may skip postinstall. The launcher recovers the
+# missing version tree, so this also completes installs with scripts disabled.
 root="$(npm root -g)/@cometix/anthropic-cc"
-if [ ! -d "$root/vendor" ]; then
-  echo "postinstall was skipped by npm; running it manually..."
-  (cd "$root" && node install.cjs)
-fi
+installed_version=$(node "$root/cli.js" --version)
 
 if command -v anthropic-cc >/dev/null 2>&1; then
-  echo "Installed: $(anthropic-cc --version)"
+  echo "Installed: $installed_version"
 else
-  echo "Installed: $(node "$root/cli.js" --version) (anthropic-cc not on PATH — check npm's global bin dir)"
+  echo "Installed: $installed_version (anthropic-cc not on PATH — check npm's global bin dir)"
 fi
