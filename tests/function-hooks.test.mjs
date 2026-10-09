@@ -101,7 +101,7 @@ test('messages, workerData, port transfer, self, VM flag and TS transpiler work 
     assert.equal(event.data.marker, 37);
     assert.equal(event.data.self, true);
     assert.equal(event.data.vm, 'function');
-    assert.deepEqual(event.data.flags, ['--no-warnings', '--experimental-vm-modules']);
+    assert.deepEqual(event.data.flags, ['--no-warnings', '--experimental-vm-modules', '--disable-warning=ExperimentalWarning']);
     assert.match(event.data.text, /export const x\s*=\s*1/);
   } finally { await worker.terminate(); }
 });

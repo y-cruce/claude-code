@@ -27,11 +27,13 @@ if (typeof globalThis.Bun === "undefined") {
       super();
       // Parent process flags (e.g. --use-system-ca) may be invalid for a Worker.
       const execArgv = options.execArgv ?? [];
+      // The worker has its own process, so the main thread's warning silencing
+      // does not reach it; without the second flag the VM Modules warning hits the terminal.
+      const workerFlags = ["--experimental-vm-modules", "--disable-warning=ExperimentalWarning"];
       this._stopped = false;
       this._worker = new NodeWorker(url, {
         ...options,
-        execArgv: execArgv.includes("--experimental-vm-modules")
-          ? execArgv : [...execArgv, "--experimental-vm-modules"],
+        execArgv: [...execArgv, ...workerFlags.filter((flag) => !execArgv.includes(flag))],
       });
       const fail = (error) => {
         if (this._stopped) return;
