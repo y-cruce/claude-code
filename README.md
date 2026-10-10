@@ -9,7 +9,7 @@ Starting from v2.1.113, Anthropic ships Claude Code as native Bun binaries inste
 Not published to npm — installs from this repo's GitHub Releases. One-shot installer (detects your platform, downloads the latest release, installs globally):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/y-cruce/claude-code/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/y-cruce/claude-code/main/install.sh | bash
 ```
 
 Or manually — the main package plus the package for your platform:

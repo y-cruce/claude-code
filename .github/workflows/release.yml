@@ -156,7 +156,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: master
+          ref: main
 
       - name: Download artifacts
         uses: actions/download-artifact@v6

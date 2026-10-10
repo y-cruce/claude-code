@@ -2,7 +2,7 @@
 # One-shot installer: downloads the latest GitHub Release of this fork and
 # installs it globally via npm.
 #
-#   curl -fsSL https://raw.githubusercontent.com/y-cruce/claude-code/master/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/y-cruce/claude-code/main/install.sh | bash
 set -euo pipefail
 
 REPO=y-cruce/claude-code
