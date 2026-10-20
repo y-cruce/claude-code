@@ -6,6 +6,10 @@ Starting from v2.1.113, Anthropic ships Claude Code as native Bun binaries inste
 
 ## Install
 
+Requires **Node.js 24 or newer**. Recent Claude Code bundles use `using` and
+`await using` declarations that Node.js 22 cannot parse. With nvm, run
+`nvm install 24` and `nvm use 24` before installing.
+
 Not published to npm — installs from this repo's GitHub Releases. One-shot installer (detects your platform, downloads the latest release, installs globally):
 
 ```bash
@@ -28,6 +32,11 @@ The CLI installs as `anthropic-cc`. Postinstall copies the platform tree and its
 ```bash
 cd "$(npm root -g)/@cometix/anthropic-cc" && node install.cjs
 ```
+
+Start it from your project directory with `anthropic-cc`. On macOS, `Ctrl+V`
+pastes an image directly from the clipboard. The image compatibility helper
+bundles sharp's JavaScript dependencies, including `@img/colour`; only the
+platform-specific `@img/sharp-*` native packages are installed separately.
 
 ## What it does
 

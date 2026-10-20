@@ -44,7 +44,7 @@ jobs:
           fetch-depth: 2
       - uses: actions/setup-node@v6
         with:
-          node-version: 'latest'
+          node-version: '24'
       - run: npm ci
 
       - name: Detect new versions
@@ -88,8 +88,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 'latest'
+          node-version: '24'
       - run: npm ci
+
+      - name: Test runtime compatibility
+        run: node --test tests/*.test.mjs
 
       - name: Build all packages
         run: |

@@ -96,7 +96,10 @@ function copyDependency(name, from, nodeModules, ancestors = new Map()) {
   }
   for (const dep of Object.keys(pkg.optionalDependencies || {})) {
     try { dependencyDir(dep, src); } catch { continue; }
-    copyDependency(dep, src, join(dest, 'node_modules'), chain);
+    // sharp's native RPATH loads libvips from a sibling @img package.
+    const target = name.startsWith('@img/sharp-') && dep.startsWith('@img/sharp-libvips-')
+      ? nodeModules : join(dest, 'node_modules');
+    copyDependency(dep, src, target, chain);
   }
   if (name === 'node-pty' && process.platform !== 'win32') {
     const prebuilds = join(dest, 'prebuilds');
@@ -214,6 +217,9 @@ export async function install() {
 }
 
 export async function launch() {
+  if (Number(process.versions.node.split('.')[0]) < 24) {
+    throw new Error(`Claude Code requires Node.js 24 or newer (running ${process.version}). Upgrade Node.js before launching anthropic-cc.`);
+  }
   const root = versionsRoot();
   const { version, runtimeBuild } = readJson(join(packageDir, 'package.json'));
   const tree = await locked(root, () => {
@@ -225,4 +231,3 @@ export async function launch() {
   process.argv[1] = join(tree, 'cli.js');
   await import(pathToFileURL(process.argv[1]).href);
 }
-

@@ -36,7 +36,7 @@ export async function buildMainPackage({
     bin: { 'anthropic-cc': 'cli.js' },
     // The launcher and the isolated runtime use the same module type.
     ...(layout === 'split-esm' ? { type: 'module' } : {}),
-    engines: { node: '>=22.0.0' },
+    engines: { node: '>=24.0.0' },
     scripts: { postinstall: 'node install.cjs' },
     author: 'Anthropic <support@anthropic.com>',
     license: 'SEE LICENSE IN README.md',

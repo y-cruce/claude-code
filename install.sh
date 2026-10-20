@@ -7,6 +7,12 @@ set -euo pipefail
 
 REPO=y-cruce/claude-code
 
+if ! command -v node >/dev/null 2>&1; then
+  echo 'Node.js 24 or newer is required. Install Node.js before running this installer.' >&2
+  exit 1
+fi
+node -e 'if (Number(process.versions.node.split(".")[0]) < 24) { console.error(`Node.js 24 or newer is required (running ${process.version}). Upgrade Node.js before installing anthropic-cc.`); process.exit(1); }'
+
 case "$(uname -s)" in
   Darwin) os=darwin ;;
   Linux)  os=linux ;;

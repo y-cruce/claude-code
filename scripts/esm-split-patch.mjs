@@ -392,7 +392,7 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     throw new Error(`expected one hooks Worker creation site, patched ${stats.hooksWorkers}`);
   }
 
-  // Bundle JS helpers at build time; native sharp stays in the existing @img packages.
+  // Bundle JS helpers, including @img/colour; only sharp's native packages stay external.
   await build({
     absWorkingDir: join(__dirname, '..'),
     entryPoints: {
@@ -403,7 +403,7 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     outdir: extractDir,
     outExtension: { '.js': '.cjs' },
     bundle: true, platform: 'node', format: 'cjs', target: 'node22', minify: true,
-    external: ['@img/*'],
+    external: ['@img/sharp-*'],
   });
   await writeFile(join(extractDir, 'bun-image-compat.cjs'),
     readFileSync(join(__dirname, '..', 'templates', 'bun-image-compat.cjs')));

@@ -133,3 +133,22 @@ test('launcher and isolated entry also support the single-CJS layout', async t =
   const main = await f.main('1.0.0', 'cjs', 'single-cjs');
   assert.equal(JSON.parse(f.run(main)).label, 'cjs');
 });
+
+test('generated packages require Node 24 and reject older runtimes before loading chunks', async t => {
+  const f = await fixture(t);
+  const preload = join(f.root, 'node22.cjs');
+  writeFileSync(preload, `
+Object.defineProperty(process.versions, 'node', { value: '22.22.2' });
+Object.defineProperty(process, 'version', { value: 'v22.22.2' });`);
+  for (const layout of ['single-cjs', 'split-esm']) {
+    const main = await f.main('1.0.0', layout, layout);
+    assert.equal(JSON.parse(readFileSync(join(main, 'package.json'))).engines.node, '>=24.0.0');
+    const result = spawnSync(process.execPath, ['--require', preload, join(main, 'cli.js')], {
+      env: f.env, encoding: 'utf8', timeout: 30000,
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /requires Node\.js 24 or newer \(running v22\.22\.2\)/);
+    assert.equal(result.stdout, '');
+    assert.equal(existsSync(f.versions), false);
+  }
+});
