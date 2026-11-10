@@ -4,26 +4,22 @@ import semver from 'semver';
 const FIRST_SEA_VERSION = '2.1.113';
 
 export async function checkNewVersions({ existing = [] } = {}) {
-  const allVersionsRaw = execFileSync('npm', [
-    'view', '@anthropic-ai/claude-code', 'versions', '--json',
-  ], { encoding: 'utf8', timeout: 30_000 });
+  // Only the upstream `latest` dist-tag: this fork republishes the current
+  // official release. Versions under `next` are pre-releases without an
+  // official GitHub release or CHANGELOG entry yet.
+  const latest = execFileSync('npm', [
+    'view', '@anthropic-ai/claude-code', 'dist-tags.latest',
+  ], { encoding: 'utf8', timeout: 30_000 }).trim();
 
-  const allVersions = JSON.parse(allVersionsRaw);
   const existingSet = new Set(existing);
-
-  // Only ever the single newest upstream version: this fork republishes the
-  // current release, not the whole back catalogue. Without this the first
-  // auto-detected run builds every unreleased version since 2.1.113.
   const newestExisting = existing
     .filter(v => semver.valid(v))
     .sort(semver.rcompare)[0];
 
-  const candidates = allVersions
-    .filter(v => semver.gte(v, FIRST_SEA_VERSION))
+  const candidates = [latest]
+    .filter(v => semver.valid(v) && semver.gte(v, FIRST_SEA_VERSION))
     .filter(v => !existingSet.has(v))
-    .filter(v => !newestExisting || semver.gt(v, newestExisting))
-    .sort(semver.compare)
-    .slice(-1);
+    .filter(v => !newestExisting || semver.gt(v, newestExisting));
 
   // Verify each candidate is actually a SEA version
   // (has platform optionalDeps, not @img/sharp-*)
