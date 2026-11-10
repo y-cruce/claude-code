@@ -323,9 +323,34 @@ export function patchPluginTestVm(code) {
   return { code, patched: inserts.length };
 }
 
+// E8: 2.1.321 refuses to make a node:vm context when its build-time "is Bun"
+// flag is set and the runtime cannot vouch for the context's global. The flag
+// is a constant true in the bundle, so on Node every plugin hooks module
+// failed to load. Ask the real runtime instead; the guard stays for Bun.
+const VM_GUARD = 'Refusing to make a node:vm context';
+export function patchVmContextGuard(code) {
+  if (!code.includes(VM_GUARD)) return { code, patched: 0 };
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  const tests = [];
+  (function visit(node) {
+    if (node.type === 'IfStatement' && node.consequent.type === 'ThrowStatement'
+      && code.slice(node.consequent.start, node.consequent.end).includes(VM_GUARD)
+      && !code.slice(node.test.start, node.test.end).includes('process.versions.bun')) tests.push(node.test);
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) visit(item);
+      } else if (child?.type) visit(child);
+    }
+  })(ast);
+  for (const test of tests.sort((a, b) => b.start - a.start)) {
+    code = `${code.slice(0, test.start)}typeof process.versions.bun==="string"&&(${code.slice(test.start, test.end)})${code.slice(test.end)}`;
+  }
+  return { code, patched: tests.length };
+}
+
 export async function patchSplitEsm({ extractDir, entryPath }) {
   const files = await listJsFiles(extractDir);
-  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, ast: {} };
+  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, vmGuards: 0, vmGuardFiles: 0, ast: {} };
 
   for (const file of files) {
     let code = await readFile(file, 'utf8');
@@ -351,6 +376,11 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     const pluginTest = patchPluginTestVm(code);
     code = pluginTest.code;
     stats.pluginTests += pluginTest.patched;
+
+    if (code.includes(VM_GUARD)) stats.vmGuardFiles += 1;
+    const vmGuard = patchVmContextGuard(code);
+    code = vmGuard.code;
+    stats.vmGuards += vmGuard.patched;
 
     const hoist = hoistTopLevelChunkRequires(code, prefixFor(file, extractDir));
     code = hoist.code;
@@ -390,6 +420,10 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
   const workerEntries = files.filter((f) => f.endsWith('hooks-worker.js'));
   if (workerEntries.length > 0 && stats.hooksWorkers !== 1) {
     throw new Error(`expected one hooks Worker creation site, patched ${stats.hooksWorkers}`);
+  }
+
+  if (stats.vmGuardFiles > 0 && stats.vmGuards === 0) {
+    throw new Error('found the node:vm context guard but could not patch it');
   }
 
   // Bundle JS helpers, including @img/colour; only sharp's native packages stay external.

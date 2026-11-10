@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { build } from 'esbuild';
-import { patchBuiltinHooksModuleShipping, patchHooksWorker, patchImportMetaDir, patchPluginTestVm, patchSplitEsm } from '../scripts/esm-split-patch.mjs';
+import { patchBuiltinHooksModuleShipping, patchHooksWorker, patchImportMetaDir, patchPluginTestVm, patchSplitEsm, patchVmContextGuard } from '../scripts/esm-split-patch.mjs';
 
 const host = `
 const urlOf = () => ({ HOOKS_WORKER_URL: '/tmp/hooks-worker.js' }).HOOKS_WORKER_URL;
@@ -88,6 +88,19 @@ test('plugin test children enable VM modules after filtering the parent environm
     "import { SourceTextModule } from 'node:vm'; console.log(typeof SourceTextModule, process.env.PROBE)", '--']);
   assert.equal(child.status, 0, child.stderr);
   assert.equal(child.stdout.trim(), 'function kept');
+});
+
+test('node:vm context guard asks the real runtime, so hooks modules load on Node (2.1.321+)', async () => {
+  const source = `import { createContext, isContext, runInContext } from 'node:vm';
+    var r = typeof Bun > "u" ? void 0 : Bun.ant?.isVmContextGlobal, f = !0;
+    function guard(t, e) { if (e !== void 0 && f && !isContext(e) && r?.(e) !== !0) throw Error("Refusing to make a node:vm context: this Bun cannot"); }
+    export function make() { const t = createContext({}); guard(t, runInContext('globalThis', t)); return t; }`;
+  const load = (code) => import('data:text/javascript,' + encodeURIComponent(code));
+  assert.throws((await load(source)).make, /Refusing to make a node:vm context/);
+  const patched = patchVmContextGuard(source);
+  assert.equal(patched.patched, 1);
+  assert.equal(patchVmContextGuard(patched.code).patched, 0);
+  assert.ok((await load(patched.code)).make());
 });
 
 test('built-in hooks receive a real module path and shipped content on Node', async () => {
