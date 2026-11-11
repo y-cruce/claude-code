@@ -412,9 +412,63 @@ export function patchHeadlessChannelHandlers(code) {
   return { code, patched: 1 };
 }
 
+// E10: background workers opt into the channels named by CC_FORK_CHANNELS.
+// Merge before the normal parser/setter so all existing channel gates apply.
+const CHANNEL_FLAGS = 'tengu_mcp_channel_flags';
+export function patchBackgroundChannelDefaults(code) {
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  const matches = [];
+  const walk = (node) => {
+    if (node.type === 'BlockStatement') {
+      for (let i = 0; i < node.body.length; i++) {
+        const declaration = node.body[i];
+        if (declaration.type !== 'VariableDeclaration') continue;
+        for (const binding of declaration.declarations) {
+          if (binding.id.type !== 'ObjectPattern') continue;
+          const property = key => binding.id.properties.find(p => p.type === 'Property' && (p.key.name ?? p.key.value) === key);
+          const channels = property('channels')?.value;
+          if (channels?.type !== 'Identifier' || !property('dangerouslyLoadDevelopmentChannels')) continue;
+          const guard = node.body[i + 1];
+          const test = guard?.test;
+          const length = test?.right;
+          const sequence = guard?.consequent?.expression;
+          if (guard?.type !== 'IfStatement' || guard.alternate !== null ||
+              test?.type !== 'LogicalExpression' || test.operator !== '&&' || test.left.name !== channels.name ||
+              length?.type !== 'BinaryExpression' || length.operator !== '>' || length.right.value !== 0 ||
+              length.left.type !== 'MemberExpression' || length.left.object.name !== channels.name || length.left.property.name !== 'length' ||
+              sequence?.type !== 'SequenceExpression' || sequence.expressions.length !== 2) continue;
+          const [assignment, setter] = sequence.expressions;
+          const parser = assignment.right;
+          if (assignment.type !== 'AssignmentExpression' || assignment.operator !== '=' || assignment.left.type !== 'Identifier' ||
+              parser?.type !== 'CallExpression' || parser.callee.type !== 'Identifier' || parser.arguments.length !== 2 ||
+              parser.arguments[0].name !== channels.name || parser.arguments[1].value !== '--channels' ||
+              setter.type !== 'CallExpression' || setter.callee.type !== 'Identifier' || setter.arguments.length !== 1 ||
+              setter.arguments[0].name !== assignment.left.name) continue;
+          const output = declaration.declarations.find(d => d.id.name === assignment.left.name);
+          if (output?.init?.type !== 'ArrayExpression' || output.init.elements.length !== 0) continue;
+          matches.push({ declaration, channels: channels.name, guard });
+        }
+      }
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) walk(item);
+      } else if (child?.type) walk(child);
+    }
+  };
+  walk(ast);
+  if (matches.length !== 1) throw new Error(`E10: expected one background channel startup anchor, found ${matches.length}`);
+  const { declaration, channels, guard } = matches[0];
+  if (declaration.kind !== 'let') throw new Error('E10: channel list must be a let binding');
+  const insert = `if(process.env.CLAUDE_CODE_SESSION_KIND==="bg"&&process.env.CC_FORK_CHANNELS)${channels}=[...new Set([...(${channels}??[]),...process.env.CC_FORK_CHANNELS.split(/[\\s,]+/).filter(Boolean)])];`;
+  code = code.slice(0, guard.start) + insert + code.slice(guard.start);
+  acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  return { code, patched: 1 };
+}
+
 export async function patchSplitEsm({ extractDir, entryPath }) {
   const files = await listJsFiles(extractDir);
-  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, vmGuards: 0, vmGuardFiles: 0, headlessChannels: 0, ast: {} };
+  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, vmGuards: 0, vmGuardFiles: 0, headlessChannels: 0, backgroundChannels: 0, ast: {} };
 
   for (const file of files) {
     let code = await readFile(file, 'utf8');
@@ -450,6 +504,12 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
       const channel = patchHeadlessChannelHandlers(code);
       code = channel.code;
       stats.headlessChannels += channel.patched;
+    }
+
+    if (code.includes(CHANNEL_FLAGS)) {
+      const channel = patchBackgroundChannelDefaults(code);
+      code = channel.code;
+      stats.backgroundChannels += channel.patched;
     }
 
     const hoist = hoistTopLevelChunkRequires(code, prefixFor(file, extractDir));
@@ -498,6 +558,10 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
 
   if (stats.headlessChannels !== 1) {
     throw new Error(`E9: expected one headless channel handler patch, patched ${stats.headlessChannels}`);
+  }
+
+  if (stats.backgroundChannels !== 1) {
+    throw new Error(`E10: expected one background channel startup patch, patched ${stats.backgroundChannels}`);
   }
 
   // Bundle JS helpers, including @img/colour; only sharp's native packages stay external.

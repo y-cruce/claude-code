@@ -126,6 +126,7 @@ export const register = () => {
 
 test('entry exists but no matching hooks constructor fails the build', async () => {
   await writeFile(join(root, 'cli.js'), 'export const changed = true;');
+  await copyFile(new URL('./fixtures/headless-channel.js', import.meta.url), join(root, 'chunk-channel.js'));
   await assert.rejects(patchSplitEsm({ extractDir: root, entryPath: join(root, 'cli.js') }), /expected one hooks Worker/);
 });
 

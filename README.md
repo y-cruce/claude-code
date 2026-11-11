@@ -66,6 +66,10 @@ Split builds are patched directory-wide by `scripts/esm-split-patch.mjs`:
 | E7 | `claude plugin test` children receive Node's VM Modules flags after environment filtering, so the testing kit can load `SourceTextModule` without a global `NODE_OPTIONS` setting |
 | E8 | Since 2.1.321 the `node:vm` context guard trusts a build-time "is Bun" flag that is always true in the bundle, so on Node every plugin hooks module failed to load (`Refusing to make a node:vm context`). The guard now asks the real runtime (`process.versions.bun`) and stays in force on Bun |
 | E9 | Headless/background plugin reloads register channel handlers when the MCP clients change, so replacement connections can confirm their startup probes without waiting for another user message. AST anchors derive the minified identifiers; a missing or ambiguous anchor fails the build |
+| E10 | Background sessions merge `CC_FORK_CHANNELS` into the normal `--channels` list, removing duplicates in order. AST anchors derive the channel bindings; missing, ambiguous or non-`let` bindings fail the build |
+
+Set `CC_FORK_CHANNELS` in the `env` object of `~/.claude/settings.json`, for example `"env": { "CC_FORK_CHANNELS": "plugin:my-notifier@my-marketplace" }`, to enable default channels only for background sessions.
+Entries use the same format as `--channels`, separated by commas or whitespace; the existing channel policy and plugin allowlist checks still apply.
 
 The patches below still apply to split builds. Only the few chunks carrying their marker strings are AST-walked — parsing all 1385 modules would cost minutes per platform.
 

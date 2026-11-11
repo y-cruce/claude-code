@@ -14,3 +14,9 @@ export function engine(getState, subscribe, queue) {
   });
   return coordinator;
 }
+
+export function startChannels(options, parse, setChannels) {
+  let { channels, dangerouslyLoadDevelopmentChannels } = options, allowed = [];
+  if (channels && channels.length > 0) allowed = parse(channels, '--channels'), setChannels(allowed);
+  return { event: 'tengu_mcp_channel_flags', allowed };
+}
