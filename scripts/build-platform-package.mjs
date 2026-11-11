@@ -131,7 +131,7 @@ export async function buildPlatformPackage({
     files: layout === 'split-esm'
       ? ['*.js', '*.mjs', '*.cjs', '*.asset', 'src/', 'vendor/']
       : ['cli.js', 'vendor/'],
-    repository: { type: 'git', url: 'https://github.com/CometixSpace/claude-code.git' },
+    repository: { type: 'git', url: 'https://github.com/y-cruce/claude-code.git' },
     license: 'SEE LICENSE IN README.md',
   };
   await writeFile(join(outputDir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');

@@ -41,9 +41,9 @@ export async function buildMainPackage({
     author: 'Anthropic <support@anthropic.com>',
     license: 'SEE LICENSE IN README.md',
     description: 'Claude Code restored for Node.js runtime.',
-    homepage: 'https://github.com/CometixSpace/claude-code',
-    repository: { type: 'git', url: 'https://github.com/CometixSpace/claude-code.git' },
-    bugs: { url: 'https://github.com/CometixSpace/claude-code/issues' },
+    homepage: 'https://github.com/y-cruce/claude-code',
+    repository: { type: 'git', url: 'https://github.com/y-cruce/claude-code.git' },
+    bugs: { url: 'https://github.com/y-cruce/claude-code/issues' },
     dependencies: {
       ws: '^8.18.0',
       yaml: '^2.7.0',
