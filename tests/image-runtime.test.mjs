@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cp, mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { copyFile, cp, mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -70,6 +70,7 @@ await (async () => {
   await using resource = { async [Symbol.asyncDispose]() {} };
 })();
 console.log(JSON.stringify({ width: metadata.width, height: metadata.height, disposed }));`);
+  await copyFile(new URL('./fixtures/headless-channel.js', import.meta.url), join(extract, 'chunk-channel.js'));
   await patchSplitEsm({ extractDir: extract, entryPath: join(extract, 'cli.js') });
   await buildPlatformPackage({
     platform: `${process.platform}-${process.arch}`, version: pkg.version, layout: 'split-esm', extractDir: extract,

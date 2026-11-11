@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -23,6 +23,7 @@ before(async () => {
   root = await mkdtemp(join(tmpdir(), 'cc-hooks-test-'));
   await writeFile(join(root, 'package.json'), '{"type":"module"}');
   await writeFile(join(root, 'cli.js'), host);
+  await copyFile(new URL('./fixtures/headless-channel.js', import.meta.url), join(root, 'chunk-channel.js'));
   const workerDir = join(root, 'src/plugins/functionHooks/hooks-worker');
   await mkdir(workerDir, { recursive: true });
   const worker = join(workerDir, 'hooks-worker.js');

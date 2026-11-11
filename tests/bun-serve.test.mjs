@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connect } from 'node:net';
@@ -13,6 +13,7 @@ before(async () => {
   root = await mkdtemp(join(tmpdir(), 'cc-bun-serve-test-'));
   await writeFile(join(root, 'package.json'), '{"type":"module"}');
   await writeFile(join(root, 'cli.js'), 'export {};\n');
+  await copyFile(new URL('./fixtures/headless-channel.js', import.meta.url), join(root, 'chunk-channel.js'));
   await patchSplitEsm({ extractDir: root, entryPath: join(root, 'cli.js') });
   await import(pathToFileURL(join(root, 'bun-polyfill.mjs')));
 });

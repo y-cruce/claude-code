@@ -348,9 +348,73 @@ export function patchVmContextGuard(code) {
   return { code, patched: tests.length };
 }
 
+// E9: headless reload installs a new MCP client while no turn is running.
+// Wire its channel on the existing clients-change subscription, before the
+// channel's startup probes run out. Derive all bundle identifiers from the AST.
+const CHANNEL_RECONNECT = 'Channel notifications re-registered after reconnect';
+export function patchHeadlessChannelHandlers(code) {
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  const handlers = new Set();
+  const properties = [];
+  const subscriptions = [];
+  const walk = (node, visit, scope = null) => {
+    if (/^(FunctionDeclaration|FunctionExpression|ArrowFunctionExpression)$/.test(node.type)) scope = node;
+    visit(node, scope);
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) walk(item, visit, scope);
+      } else if (child?.type) walk(child, visit, scope);
+    }
+  };
+  walk(ast, (node, scope) => {
+    if (node.type === 'Literal' && node.value === CHANNEL_RECONNECT) handlers.add(scope?.id?.name);
+    if (node.type === 'Property' && (node.key.name ?? node.key.value) === 'registerChannelHandler') properties.push({ node, scope });
+    if (node.type === 'CallExpression' && node.arguments.length === 1 &&
+        node.arguments[0].type === 'ArrowFunctionExpression' && node.arguments[0].params.length === 0 &&
+        node.arguments[0].body.type === 'BlockStatement') subscriptions.push({ node, scope });
+  });
+  const registrations = properties.filter(({ node }) => {
+    const value = node.value;
+    return value.type === 'ArrowFunctionExpression' && value.params.length === 1 &&
+      value.body.type === 'CallExpression' && handlers.has(value.body.callee.name) &&
+      value.body.arguments.length === 2 && value.body.arguments[0].name === value.params[0].name &&
+      value.body.arguments[1].type === 'Identifier';
+  });
+  if (handlers.size !== 1 || handlers.has(undefined) || registrations.length !== 1) {
+    throw new Error('E9: expected one headless registerChannelHandler anchor');
+  }
+  const registration = registrations[0];
+  const matches = [];
+  for (const subscription of subscriptions.filter(s => s.scope === registration.scope)) {
+    const body = subscription.node.arguments[0].body;
+    const rows = body.body.filter(n => n.type === 'VariableDeclaration').flatMap(n => n.declarations)
+      .filter(n => n.id.type === 'Identifier' && n.init?.type === 'MemberExpression' &&
+        n.init.property.name === 'clients' && n.init.object.type === 'MemberExpression' &&
+        n.init.object.property.name === 'mcp' && n.init.object.object.type === 'CallExpression');
+    for (const row of rows) {
+      const guard = body.body.find(n => n.type === 'IfStatement' && n.test.type === 'BinaryExpression' &&
+        n.test.operator === '===' && n.test.left.name === row.id.name &&
+        n.test.right.type === 'Identifier' && n.consequent.type === 'ReturnStatement');
+      if (!guard) continue;
+      let updatesPrevious = false;
+      walk(body, n => {
+        if (n.type === 'AssignmentExpression' && n.operator === '=' &&
+            n.left.name === guard.test.right.name && n.right.name === row.id.name) updatesPrevious = true;
+      });
+      if (updatesPrevious) matches.push({ body, rows: row.id.name });
+    }
+  }
+  if (matches.length !== 1) throw new Error(`E9: expected one headless MCP clients-change callback, found ${matches.length}`);
+  const { body, rows } = matches[0];
+  const call = registration.node.value.body;
+  const insert = `;${rows}.forEach((__ccChannelClient)=>${call.callee.name}(__ccChannelClient,${call.arguments[1].name}));`;
+  code = code.slice(0, body.end - 1) + insert + code.slice(body.end - 1);
+  return { code, patched: 1 };
+}
+
 export async function patchSplitEsm({ extractDir, entryPath }) {
   const files = await listJsFiles(extractDir);
-  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, vmGuards: 0, vmGuardFiles: 0, ast: {} };
+  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, vmGuards: 0, vmGuardFiles: 0, headlessChannels: 0, ast: {} };
 
   for (const file of files) {
     let code = await readFile(file, 'utf8');
@@ -381,6 +445,12 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     const vmGuard = patchVmContextGuard(code);
     code = vmGuard.code;
     stats.vmGuards += vmGuard.patched;
+
+    if (code.includes(CHANNEL_RECONNECT)) {
+      const channel = patchHeadlessChannelHandlers(code);
+      code = channel.code;
+      stats.headlessChannels += channel.patched;
+    }
 
     const hoist = hoistTopLevelChunkRequires(code, prefixFor(file, extractDir));
     code = hoist.code;
@@ -424,6 +494,10 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
 
   if (stats.vmGuardFiles > 0 && stats.vmGuards === 0) {
     throw new Error('found the node:vm context guard but could not patch it');
+  }
+
+  if (stats.headlessChannels !== 1) {
+    throw new Error(`E9: expected one headless channel handler patch, patched ${stats.headlessChannels}`);
   }
 
   // Bundle JS helpers, including @img/colour; only sharp's native packages stay external.
