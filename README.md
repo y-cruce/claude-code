@@ -41,7 +41,7 @@ platform-specific `@img/sharp-*` native packages are installed separately.
 ## What it does
 
 1. Downloads official Claude Code binaries from all 8 platforms (darwin/linux/win32 × arm64/x64)
-2. Extracts the embedded JavaScript and native modules from Bun SEA format
+2. Extracts the embedded JavaScript and native modules from Bun SEA format. Text assets that the module graph stores as UTF-16LE (14 `.md`/`.txt` prompt, skill and REPL files since 2.1.322) are written out as UTF-8, the encoding every reader expects
 3. Patches the code for Node.js compatibility (hardcoded paths, Bun-only APIs, module loading)
 4. Reassembles into a standard npm package with `vendor/` dependencies
 

@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile, readFile, stat, copyFile } from 'node:fs/promises
 import { readdirSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { extractBunSEA } from './bun-sea-extract.mjs';
+import { extractBunSEA, moduleContents } from './bun-sea-extract.mjs';
 import { patchFile } from './node-compat-patch.mjs';
 import { patchSplitEsm } from './esm-split-patch.mjs';
 import { buildPlatformPackage } from './build-platform-package.mjs';
@@ -215,7 +215,7 @@ export async function fetchAndProcess({
       if (mod.contents?.length > 0) {
         const outPath = join(extractDir, name);
         await mkdir(join(outPath, '..'), { recursive: true });
-        await writeFile(outPath, mod.contents);
+        await writeFile(outPath, moduleContents(mod));
       }
     }
 

@@ -84,6 +84,17 @@ function parseModuleEntry(bunData, offset, entrySize) {
   };
 }
 
+// Text assets the graph tags with encoding 2 ("utf8") hold UTF-16LE bytes
+// (14 .md/.txt files in 2.1.322, each with a non-Latin-1 character), while
+// readers load .md/.txt as UTF-8. Real UTF-8 text never contains NUL, so a
+// NUL confirms the tag before converting; anything else is written as-is.
+export function moduleContents(mod) {
+  const bytes = mod.contents;
+  if (mod.encoding !== 'utf8' || !bytes || bytes.length % 2 !== 0 || !bytes.includes(0)) return bytes;
+  const text = bytes.toString('utf16le');
+  return text.includes('\0') ? bytes : Buffer.from(text, 'utf8');
+}
+
 // ──────────────────────────────────────────────
 //  Parse bun data from section content
 // ──────────────────────────────────────────────
@@ -244,7 +255,7 @@ export async function extractToDir(binaryPath, outputDir) {
 
     const outPath = join(outputDir, name);
     await mkdir(dirname(outPath), { recursive: true });
-    await writeFile(outPath, mod.contents);
+    await writeFile(outPath, moduleContents(mod));
     console.log(`  [dump] ${name}`);
     extracted++;
   }
