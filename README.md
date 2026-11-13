@@ -68,6 +68,7 @@ Split builds are patched directory-wide by `scripts/esm-split-patch.mjs`:
 | E9 | Headless/background plugin reloads register channel handlers when the MCP clients change, so replacement connections can confirm their startup probes without waiting for another user message. AST anchors derive the minified identifiers; a missing or ambiguous anchor fails the build |
 | E10 | Background sessions merge `CC_FORK_CHANNELS` into the normal `--channels` list, removing duplicates in order. AST anchors derive the channel bindings; missing, ambiguous or non-`let` bindings fail the build |
 | E11 | Code Mode (2.1.323+) admits only the native Bun build: its runtime gate asks whether Bun runs as a standalone executable, and its engine check needs `bun:jsc`. With `CLAUDE_CODE_NODE_UNSAFE_CODE_MODE=1` on Node, the runtime gate (E11a) and the engine check (E11b) pass; without it both refuse as before. AST anchors: the `if(!x())return"runtime"` guard in the Code Mode admission chunk and the `if(!x())return"not_bun"` guard in the engine check; a tree that mentions `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE` without exactly one of each fails the build. The P6 polyfill's `Bun.Transpiler({replMode:true})` produces the REPL envelope the tool expects. See [Code Mode on Node](#code-mode-on-node-unsafe) |
+| E12 | Code Mode refuses to start, and refuses each tool call a REPL script makes, when an installed mod registers a tool-related hook event. A REPL call already runs a mod's `tool.call` chain the way an ordinary call does, so with `CLAUDE_CODE_NODE_UNSAFE_CODE_MODE=1` on Node the event list both checks share leaves out `tool.call`; `tool.check` and the other events still refuse. AST anchor: the array literal that holds `"tool.call"`, `"tool.check"` and `"classic.PreToolUse"`; a tree that mentions `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE` without exactly one fails the build |
 
 Set `CC_FORK_CHANNELS` in the `env` object of `~/.claude/settings.json`, for example `"env": { "CC_FORK_CHANNELS": "plugin:my-notifier@my-marketplace" }`, to enable default channels only for background sessions.
 Entries use the same format as `--channels`, separated by commas or whitespace; the existing channel policy and plugin allowlist checks still apply.
@@ -100,6 +101,8 @@ Code Mode replaces the ordinary tools with a REPL tool: the model writes JavaScr
 
 - It only lifts the Node runtime refusal. Code Mode's other requirements still apply: `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE`, a supported model, the server-side feature flag, and the first-run confirmation.
 - It needs an interactive session; `-p` and other non-interactive entrypoints stay refused, as upstream decides.
+- Plugins whose only tool-related hooks are `tool.call` (such as codex) work alongside Code Mode; a mod that registers other tool-related events (`tool.check`, `classic.PreToolUse`, `agent.spawn` and the like) still keeps Code Mode off.
+- Under Code Mode a plugin's `$.tool.call` to a tool the REPL takes over (Bash, Read, Glob, Grep, NotebookEdit) fails with `no tool named`.
 
 ```bash
 CLAUDE_CODE_NODE_UNSAFE_CODE_MODE=1 CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1 anthropic-cc

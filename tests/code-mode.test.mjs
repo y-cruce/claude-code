@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import { moduleContents } from '../scripts/bun-sea-extract.mjs';
+import { patchCodeModeModEvents } from '../scripts/esm-split-patch.mjs';
 
 const { replTransform } = createRequire(import.meta.url)('../templates/bun-transpiler-compat.cjs');
 
@@ -35,4 +36,17 @@ test('UTF-16LE text assets are written as UTF-8', () => {
   const utf8 = Buffer.from(text, 'utf8');
   assert.equal(moduleContents({ encoding: 'utf8', contents: utf8 }), utf8);
   assert.equal(moduleContents({ encoding: 'binary', contents: Buffer.from(text, 'utf16le') }).length, text.length * 2);
+});
+
+test('E12 drops tool.call from the mod event list only under the Node opt-in', () => {
+  const { code, patched } = patchCodeModeModEvents('var r=["tool.call","tool.check","classic.PreToolUse","session.send"];export{r};');
+  assert.equal(patched, 1);
+  const list = (optIn) => {
+    const env = process.env.CLAUDE_CODE_NODE_UNSAFE_CODE_MODE;
+    process.env.CLAUDE_CODE_NODE_UNSAFE_CODE_MODE = optIn;
+    try { return vm.runInNewContext(code.replace('export{r};', 'r'), { process }); }
+    finally { if (env === undefined) delete process.env.CLAUDE_CODE_NODE_UNSAFE_CODE_MODE; else process.env.CLAUDE_CODE_NODE_UNSAFE_CODE_MODE = env; }
+  };
+  assert.deepEqual([...list('1')], ['tool.check', 'classic.PreToolUse', 'session.send']);
+  assert.deepEqual([...list('0')], ['tool.call', 'tool.check', 'classic.PreToolUse', 'session.send']);
 });

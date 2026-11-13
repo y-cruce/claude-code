@@ -508,9 +508,36 @@ export function patchNodeCodeMode(code) {
   return { code, admission: admissions, engine: engines };
 }
 
+// E12: Code Mode refuses to start, and refuses each REPL call, when a mod
+// registers any tool-related hook event. A REPL call already runs a mod's
+// tool.call chain like an ordinary call, so with the E11 opt-in the event
+// list both checks share drops "tool.call"; tool.check and the rest still
+// refuse. Plugins that only use tool.call (codex) then work in Code Mode.
+const MOD_EVENTS = ['tool.call', 'tool.check', 'classic.PreToolUse'];
+export function patchCodeModeModEvents(code) {
+  if (!MOD_EVENTS.every((e) => code.includes(`"${e}"`))) return { code, patched: 0 };
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  const hits = [];
+  (function visit(node) {
+    if (node.type === 'ArrayExpression') {
+      const values = node.elements.map((e) => e?.type === 'Literal' ? e.value : undefined);
+      if (MOD_EVENTS.every((e) => values.includes(e))) hits.push(node.elements[values.indexOf('tool.call')]);
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) visit(item);
+      } else if (child?.type) visit(child);
+    }
+  })(ast);
+  for (const el of hits.sort((a, b) => b.start - a.start)) {
+    code = `${code.slice(0, el.start)}...(${CODE_MODE_OPT_IN}?[]:["tool.call"])${code.slice(el.end)}`;
+  }
+  return { code, patched: hits.length };
+}
+
 export async function patchSplitEsm({ extractDir, entryPath }) {
   const files = await listJsFiles(extractDir);
-  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, vmGuards: 0, vmGuardFiles: 0, headlessChannels: 0, backgroundChannels: 0, codeModeFiles: 0, codeModeAdmission: 0, codeModeEngine: 0, ast: {} };
+  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, vmGuards: 0, vmGuardFiles: 0, headlessChannels: 0, backgroundChannels: 0, codeModeFiles: 0, codeModeAdmission: 0, codeModeEngine: 0, codeModeModEvents: 0, ast: {} };
 
   for (const file of files) {
     let code = await readFile(file, 'utf8');
@@ -547,6 +574,9 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     code = codeMode.code;
     stats.codeModeAdmission += codeMode.admission;
     stats.codeModeEngine += codeMode.engine;
+    const modEvents = patchCodeModeModEvents(code);
+    code = modEvents.code;
+    stats.codeModeModEvents += modEvents.patched;
 
     if (code.includes(CHANNEL_RECONNECT)) {
       const channel = patchHeadlessChannelHandlers(code);
@@ -606,6 +636,10 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
 
   if (stats.codeModeFiles > 0 && (stats.codeModeAdmission !== 1 || stats.codeModeEngine !== 1)) {
     throw new Error(`E11: expected one Code Mode runtime gate and one engine check, patched ${stats.codeModeAdmission} and ${stats.codeModeEngine}`);
+  }
+
+  if (stats.codeModeFiles > 0 && stats.codeModeModEvents !== 1) {
+    throw new Error(`E12: expected one Code Mode mod event list, patched ${stats.codeModeModEvents}`);
   }
 
   if (stats.headlessChannels !== 1) {
