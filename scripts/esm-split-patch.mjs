@@ -466,9 +466,51 @@ export function patchBackgroundChannelDefaults(code) {
   return { code, patched: 1 };
 }
 
+// E11: Code Mode (2.1.323+) admits only the native Bun build: the runtime
+// gate asks "is Bun standalone" and the engine check needs bun:jsc. With
+// CLAUDE_CODE_NODE_UNSAFE_CODE_MODE=1 on Node, both pass (E11a, E11b); every
+// other gate stays. Node's vm is not a security boundary, so this is opt-in.
+const CODE_MODE_OPT_IN = 'typeof process.versions.bun!=="string"&&process.env.CLAUDE_CODE_NODE_UNSAFE_CODE_MODE==="1"';
+const CODE_MODE_ENV = 'CLAUDE_CODE_EXPERIMENTAL_CODE_MODE';
+const ENGINE_CHECK = '"not_bun"';
+function returnsLiteral(node, value) {
+  return node.type === 'IfStatement' && node.alternate === null && node.consequent.type === 'ReturnStatement' &&
+    node.consequent.argument?.type === 'Literal' && node.consequent.argument.value === value &&
+    node.test.type === 'UnaryExpression' && node.test.operator === '!' &&
+    node.test.argument.type === 'CallExpression' && node.test.argument.arguments.length === 0;
+}
+export function patchNodeCodeMode(code) {
+  const admission = code.includes(CODE_MODE_ENV) && code.includes('"runtime"');
+  const engine = code.includes(ENGINE_CHECK);
+  if (!admission && !engine) return { code, admission: 0, engine: 0 };
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  const edits = [];
+  let admissions = 0, engines = 0;
+  (function visit(node) {
+    // E11a: if(!z())return"runtime" -> if(!(z()||opt-in))return"runtime"
+    if (admission && returnsLiteral(node, 'runtime')) {
+      const call = node.test.argument;
+      edits.push({ at: call.start, text: '(' }, { at: call.end, text: `||${CODE_MODE_OPT_IN})` });
+      admissions++;
+    }
+    // E11b: if(!hh())return"not_bun" -> preceded by if(opt-in)return"passed"
+    if (engine && returnsLiteral(node, 'not_bun')) {
+      edits.push({ at: node.start, text: `if(${CODE_MODE_OPT_IN})return"passed";` });
+      engines++;
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) visit(item);
+      } else if (child?.type) visit(child);
+    }
+  })(ast);
+  for (const { at, text } of edits.sort((a, b) => b.at - a.at)) code = code.slice(0, at) + text + code.slice(at);
+  return { code, admission: admissions, engine: engines };
+}
+
 export async function patchSplitEsm({ extractDir, entryPath }) {
   const files = await listJsFiles(extractDir);
-  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, vmGuards: 0, vmGuardFiles: 0, headlessChannels: 0, backgroundChannels: 0, ast: {} };
+  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, vmGuards: 0, vmGuardFiles: 0, headlessChannels: 0, backgroundChannels: 0, codeModeFiles: 0, codeModeAdmission: 0, codeModeEngine: 0, ast: {} };
 
   for (const file of files) {
     let code = await readFile(file, 'utf8');
@@ -499,6 +541,12 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     const vmGuard = patchVmContextGuard(code);
     code = vmGuard.code;
     stats.vmGuards += vmGuard.patched;
+
+    if (code.includes(CODE_MODE_ENV)) stats.codeModeFiles += 1;
+    const codeMode = patchNodeCodeMode(code);
+    code = codeMode.code;
+    stats.codeModeAdmission += codeMode.admission;
+    stats.codeModeEngine += codeMode.engine;
 
     if (code.includes(CHANNEL_RECONNECT)) {
       const channel = patchHeadlessChannelHandlers(code);
@@ -554,6 +602,10 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
 
   if (stats.vmGuardFiles > 0 && stats.vmGuards === 0) {
     throw new Error('found the node:vm context guard but could not patch it');
+  }
+
+  if (stats.codeModeFiles > 0 && (stats.codeModeAdmission !== 1 || stats.codeModeEngine !== 1)) {
+    throw new Error(`E11: expected one Code Mode runtime gate and one engine check, patched ${stats.codeModeAdmission} and ${stats.codeModeEngine}`);
   }
 
   if (stats.headlessChannels !== 1) {

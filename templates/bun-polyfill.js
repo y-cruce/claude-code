@@ -1372,8 +1372,10 @@ if (typeof globalThis.Bun === "undefined") {
     })(),
 
     Transpiler: class BunTranspilerPolyfill {
-      constructor(opts = {}) { this._loader = opts.loader || "js"; }
+      constructor(opts = {}) { this._loader = opts.loader || "js"; this._replMode = opts.replMode === true; }
       transformSync(code) {
+        // Code Mode's REPL tool needs Bun's REPL envelope, not the source as-is.
+        if (this._replMode) return require("./bun-transpiler-compat.cjs").replTransform(String(code));
         if (this._loader === "js") return typeof code === "string" ? code : "";
         return require("./bun-transpiler-compat.cjs").transformSync(code, this._loader);
       }
