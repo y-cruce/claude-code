@@ -137,6 +137,10 @@ on macOS/Linux, or `%LOCALAPPDATA%/anthropic-cc/versions/` on Windows
 (falling back to `~/AppData/Local`). Set `ANTHROPIC_CC_DATA_DIR` to override
 the `anthropic-cc` data directory, including for temporary installs.
 
+The build entry enables VM Modules in the main Node process when needed.
+Claude Code 2.1.327 uses `vm.SourceTextModule` to check plugin declarations
+before starting the hooks worker.
+
 Each build contains its own `node_modules/`, assets and binaries. Installation
 copies into a temporary sibling directory, renames the complete tree into
 place, then atomically replaces the version's `current.json` pointer. A

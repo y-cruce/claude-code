@@ -183,7 +183,47 @@ function populate(mainDir, versionDir) {
     const prelude = pkg.type === 'module'
       ? `import { mkdirSync, writeFileSync } from 'node:fs';\nimport { dirname, join } from 'node:path';\nimport { fileURLToPath } from 'node:url';\nconst tree = dirname(fileURLToPath(import.meta.url));\n`
       : `const { mkdirSync, writeFileSync } = require('node:fs');\nconst { join } = require('node:path');\nconst tree = __dirname;\n`;
-    writeFileSync(join(temp, 'cli.js'), `#!/usr/bin/env node\n${prelude}const markers = join(tree, '.pids');\nmkdirSync(markers, { recursive: true });\nwriteFileSync(join(markers, String(process.pid)), '');\nimport('./runtime-entry.js').catch(error => { console.error(error); process.exitCode = 1; });\n`);
+    writeFileSync(join(temp, 'cli.js'), `#!/usr/bin/env node
+${prelude}const markers = join(tree, '.pids');
+mkdirSync(markers, { recursive: true });
+writeFileSync(join(markers, String(process.pid)), '');
+
+async function start() {
+  const reexec = 'ANTHROPIC_CC_VM_REEXEC';
+  if (typeof process.getBuiltinModule('node:vm').SourceTextModule === 'function') {
+    delete process.env[reexec];
+    await import('./runtime-entry.js');
+    return;
+  }
+  if (process.env[reexec]) throw new Error('Node VM Modules are unavailable after restarting Claude Code');
+
+  const args = [...process.execArgv, '--experimental-vm-modules', '--disable-warning=ExperimentalWarning',
+    join(tree, 'cli.js'), ...process.argv.slice(2)];
+  const env = { ...process.env, [reexec]: '1' };
+  if (typeof process.execve === 'function') {
+    process.execve(process.execPath, [process.argv0, ...args], env);
+    return;
+  }
+
+  const { spawn } = process.getBuiltinModule('node:child_process');
+  const { once } = process.getBuiltinModule('node:events');
+  const { constants } = process.getBuiltinModule('node:os');
+  const child = spawn(process.execPath, args, { argv0: process.argv0, env, stdio: 'inherit' });
+  const windows = process.platform === 'win32';
+  const signals = windows ? ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'] : ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  const forward = signal => {
+    // On Windows the shared console delivers Ctrl+C, Ctrl+Break and close to both processes.
+    if (!windows || signal === 'SIGTERM') child.kill(signal);
+  };
+  for (const signal of signals) process.on(signal, forward);
+  const [code, signal] = await once(child, 'exit').finally(() => {
+    for (const signal of signals) process.removeListener(signal, forward);
+  });
+  process.exitCode = code ?? 128 + (constants.signals[signal] ?? 0);
+}
+
+start().catch(error => { console.error(error); process.exitCode = 1; });
+`);
     chmodSync(join(temp, 'cli.js'), 0o755);
     const build = `build-${Date.now()}-${temp.split('.tmp-').pop()}`;
     const tree = join(versionDir, build);

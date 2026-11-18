@@ -32,7 +32,8 @@ async function fixture(t) {
   const { createRequire } = await import('node:module');
   const req = createRequire(process.argv[1]);
   const dep = req('fixture-dep');
-  console.log(JSON.stringify({ label: (await import('./chunk-lazy.js')).default, dep, cli: process.argv[1], nodeOptions: process.env.NODE_OPTIONS }));
+  console.log(JSON.stringify({ label: (await import('./chunk-lazy.js')).default, dep, cli: process.argv[1], nodeOptions: process.env.NODE_OPTIONS,
+    args: process.argv.slice(2), vmAvailable: typeof req('node:vm').SourceTextModule === 'function', reexec: process.env.ANTHROPIC_CC_VM_REEXEC }));
   if (process.argv.includes('--wait')) setInterval(() => {}, 1000);
 })();`);
     // Both dependencies are hoisted. The copied tree must resolve without npm.
@@ -132,6 +133,41 @@ test('launcher and isolated entry also support the single-CJS layout', async t =
   const f = await fixture(t);
   const main = await f.main('1.0.0', 'cjs', 'single-cjs');
   assert.equal(JSON.parse(f.run(main)).label, 'cjs');
+});
+
+test('the build entry enables VM Modules once and preserves the POSIX PID', async t => {
+  const f = await fixture(t);
+  const tree = await f.install(await f.main('2.1.327'));
+  const preload = join(f.root, 'trace.cjs');
+  const trace = join(f.root, 'trace.jsonl');
+  writeFileSync(preload, `
+const vmAvailable = typeof require('node:vm').SourceTextModule === 'function';
+require('node:fs').appendFileSync(process.env.CC_VM_TEST_TRACE, JSON.stringify({ pid: process.pid, argv0: process.argv0, vmAvailable }) + '\\n');`);
+
+  const args = ['--fixture', 'argument with spaces'];
+  for (const [flags, nodeOptions, expected] of [
+    [[], '', [false, true]],
+    [['--experimental-vm-modules'], '', [true]],
+    [[], '--experimental-vm-modules', [true]],
+  ]) {
+    writeFileSync(trace, '');
+    const result = spawnSync(process.execPath, ['--require', preload, ...flags, join(tree, 'cli.js'), ...args], {
+      argv0: 'claude fixture', env: { ...f.env, NODE_OPTIONS: nodeOptions, ANTHROPIC_CC_VM_REEXEC: '', CC_VM_TEST_TRACE: trace },
+      encoding: 'utf8', timeout: 30000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const starts = readFileSync(trace, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.deepEqual(starts.map(start => start.vmAvailable), expected);
+    if (typeof process.execve === 'function') {
+      assert.ok(starts.every(start => start.pid === result.pid));
+      assert.ok(starts.every(start => start.argv0 === 'claude fixture'));
+    }
+    const runtime = JSON.parse(result.stdout);
+    assert.equal(runtime.vmAvailable, true);
+    assert.equal(runtime.reexec, undefined);
+    assert.deepEqual(runtime.args, args);
+    assert.equal(runtime.nodeOptions, nodeOptions);
+  }
 });
 
 test('generated packages require Node 24 and reject older runtimes before loading chunks', async t => {
