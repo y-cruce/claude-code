@@ -226,6 +226,22 @@ export function astPatch(code, sourceType = 'script') {
         node.type === 'FunctionDeclaration' &&
         node.params.length >= 2 && node.params.length <= 4) {
       const body = code.slice(node.start, node.end);
+      // DRt builds the wrapper; IRt supplies ARGV0. Switch both native
+      // branches to PATH lookup while keeping DRt's prefix and option handling.
+      if (node.params.length === 4 && body.includes('_cc_bin') && body.includes('process.execPath')) {
+        const [, target, prefix] = node.params;
+        const dispatch = node.body.body.at(-1)?.argument?.callee?.object?.elements?.at(-2)?.argument;
+        if (target.type === 'Identifier' && prefix.left?.type === 'Identifier' && dispatch?.type === 'ConditionalExpression') {
+          const name = target.name, args = prefix.left.name;
+          const native = code.slice(dispatch.start, dispatch.end);
+          const direct = '["  command "+' + name + '+(' + args + '.length?" "+' + args + '.join(" "):"")+'
+            + JSON.stringify(' ${1+"$@"}') + ']';
+          replacements.push({ start: dispatch.start, end: dispatch.end,
+            replacement: `(${name}==="bfs"||${name}==="ugrep"?${direct}:${native})` });
+          stats.p8 = true;
+          return;
+        }
+      }
       if (body.includes('ARGV0') && body.includes('_cc_bin') && body.includes('command')) {
         // Find `M=L?PV(f):f` or similar — the assignment that sets the fallback path.
         // It's a ternary (ConditionalExpression) involving the windows check.
