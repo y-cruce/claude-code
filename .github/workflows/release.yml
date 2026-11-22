@@ -1,22 +1,8 @@
 name: Release
 
 on:
-  schedule:
-    # Daily at 22:13 UTC (06:13 UTC+8 next day); auto-detects and releases new upstream versions.
-    # NOTE: GitHub disables scheduled workflows in public forks, so this never
-    # fires while the repo is part of the upstream fork network — it needs
-    # either "Leave fork network" or an external workflow_dispatch trigger.
-    - cron: '13 22 * * *'
-  # Touching .release-trigger starts a run. This is how the daily cloud routine
-  # kicks off a build: its GitHub integration can write files but cannot call
-  # the workflow_dispatch API (403 "not accessible by integration").
-  # A commit that adds `version: X` (and optionally `force: true`) lines to the
-  # file does what the matching workflow_dispatch inputs do, once: only lines
-  # that commit adds count, so later touches go back to auto-detect.
-  push:
-    branches: [main]
-    paths:
-      - '.release-trigger'
+  # Manual only: a new upstream version is checked in a local session first, then
+  # released with `gh workflow run release.yml -f version=<x.y.z>`.
   workflow_dispatch:
     inputs:
       version:
@@ -40,8 +26,6 @@ jobs:
       force: ${{ steps.detect.outputs.force }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 2
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -54,11 +38,6 @@ jobs:
         run: |
           VERSION="${{ inputs.version }}"
           FORCE="${{ inputs.force }}"
-          if [ "${{ github.event_name }}" = "push" ] && git rev-parse -q --verify HEAD~1 >/dev/null; then
-            ADDED=$(git diff HEAD~1 HEAD -- .release-trigger | sed -n 's/^+//p')
-            VERSION=$(printf '%s\n' "$ADDED" | sed -n 's/^version:[[:space:]]*//p' | tr -d '[:space:]')
-            FORCE=$(printf '%s\n' "$ADDED" | sed -n 's/^force:[[:space:]]*//p' | tr -d '[:space:]')
-          fi
           if [ -n "$VERSION" ] && ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Invalid version: $VERSION" >&2
             exit 1

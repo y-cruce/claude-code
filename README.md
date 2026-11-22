@@ -182,7 +182,7 @@ src/plugins/functionHooks/hooks-worker/hooks-worker.js
 
 ## Releases (this fork)
 
-This fork does **not** publish to npm — builds produce GitHub Release artifacts only (see [Install](#install)). A scheduled run at 22:13 UTC daily picks up new upstream versions automatically; a specific version can also be built manually:
+This fork does **not** publish to npm — builds produce GitHub Release artifacts only (see [Install](#install)). Releases start only by hand: check a new upstream version in a local session first, then run:
 
 ```bash
 gh workflow run release.yml -f version=<x.y.z>
@@ -193,7 +193,7 @@ Fork changes on top of upstream:
 - Support the flattened Bun SEA layout introduced in v2.1.229 (`cli.js` moved from `src/entrypoints/` to the extract root) — this is what stalls upstream builds from v2.1.229 on
 - Support the split-ESM layout introduced in v2.1.242 (one CJS bundle replaced by an ESM entry plus ~1385 chunks) — see [Bundle layouts](#bundle-layouts)
 - Bun text-loader semantics for `require()` of embedded `.md`/`.txt` prompt assets — without this, ≥ 2.1.246 crashes at startup (see E3)
-- Daily scheduled build (00:00 UTC) that auto-detects and releases new upstream versions
+- Release workflow runs only on manual dispatch; an empty `version` auto-detects new upstream versions
 - CI verify step fails on startup crashes (`pipefail` — a crash behind `| head` used to pass) and smoke-tests `mcp list`
 - Retry binary downloads on transient CDN errors (`curl --retry`)
 - npm publish job removed from the release workflow
