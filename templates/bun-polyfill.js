@@ -1409,6 +1409,26 @@ if (typeof globalThis.Bun === "undefined") {
     embeddedFiles: [],
   };
 
+  // Claude Code passes its per-request proxy selection to Bun's fetch.
+  // Node ignores that option unless it is translated to an Undici dispatcher.
+  const nodeFetch = globalThis.fetch;
+  let fetchProxy;
+  globalThis.fetch = async function (input, init) {
+    if (!init?.proxy || init.dispatcher) return nodeFetch(input, init);
+
+    const { proxy, tls, ...options } = init;
+    const uri = typeof proxy === "string" ? proxy : proxy.url;
+    const headers = Object.fromEntries(new Headers(proxy.headers));
+    const route = { uri, headers, requestTls: tls };
+    if (!fetchProxy || !util.isDeepStrictEqual(fetchProxy.route, route)) {
+      const { ProxyAgent } = require("undici");
+      const dispatcher = new ProxyAgent({ ...route, headers: { ...headers }, token: headers["proxy-authorization"] });
+      void fetchProxy?.dispatcher.close().catch(() => {});
+      fetchProxy = { route, dispatcher };
+    }
+    return nodeFetch(input, { ...options, dispatcher: fetchProxy.dispatcher });
+  };
+
   // Fix axios env-proxy handling for HTTPS targets.
   // The bundled axios (used by e.g. `claude remote-control` environment
   // registration) implements HTTP(S)_PROXY by sending a *plain HTTP* request

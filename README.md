@@ -89,6 +89,7 @@ Applied by `scripts/node-compat-patch.mjs` — to the extracted `cli.js` (~27MB)
 | P8 | In embedded search mode, the generated `find` and `grep` shell functions call `bfs` and `ugrep` from PATH. The wrappers preserve the leading arguments and options passed by the shell snapshot generator |
 | P9 | Package name rebranded: all `@anthropic-ai/claude-code` references (~250 occurrences) → `@cometix/anthropic-cc`, so the built-in auto-updater installs this package instead of the official Bun build |
 | P10 | CONNECT tunneling for HTTPS requests that axios forwards in absolute form through an HTTP proxy when only `ALL_PROXY` is set or axios is given an explicit `proxy` configuration. The P6 polyfill intercepts `http.request` calls whose `path` is an absolute `https://` URL and reissues them through a CONNECT tunnel. Remote Control uses its own CONNECT tunnel since 2.1.326 (see the [upstream issue](https://github.com/anthropics/claude-code/issues/71781)) |
+| P11 | Translate Bun's per-request `fetch` proxy option to an Undici dispatcher on Node. Model requests use the proxy selected by Claude Code, including proxies read from `settings.json`. Release verification checks the packaged CLI against a local HTTPS server and distinct settings and shell proxies. |
 
 Outside the patcher, the package also ships `bun-ink-compat.cjs` (precompiled ansi-regex/strip-ansi/string-width/ansi-styles/wrap-ansi for terminal text handling) and `install.cjs` (postinstall: detects platform incl. musl/Android and installs an isolated runtime tree).
 
