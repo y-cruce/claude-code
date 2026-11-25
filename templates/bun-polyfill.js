@@ -11,6 +11,49 @@ if (typeof globalThis.Bun === "undefined") {
   const https = require("https");
   const { Readable } = require("stream");
   const util = require("util");
+  const os = require("os");
+  const path = require("path");
+
+  // ──────────────────────────────────────────────
+  // Module loading fast paths (compile cache + direct chunk resolution)
+  //
+  // Installed before any chunk is loaded (by cli.js and hooks-worker alike):
+  // - V8 compile cache under the user's cache directory (NODE_COMPILE_CACHE
+  //   and NODE_DISABLE_COMPILE_CACHE still take precedence in Node).
+  // - Direct resolve hook for relative chunk imports inside this package
+  //   (chunk-*.js and 2.1.246+ _[0-9]*.js), leaving external specifiers to
+  //   Node's default resolver.
+  // ──────────────────────────────────────────────
+  (function installModuleFastPaths() {
+    const Module = require("module");
+
+    if (typeof Module.enableCompileCache === "function") {
+      try {
+        const home = os.homedir();
+        const base = process.platform === "win32"
+          ? process.env.LOCALAPPDATA || path.join(home, "AppData", "Local")
+          : process.platform === "darwin"
+            ? path.join(home, "Library", "Caches")
+            : process.env.XDG_CACHE_HOME || path.join(home, ".cache");
+        Module.enableCompileCache(path.join(base, "anthropic-cc", "node-compile-cache"));
+      } catch {}
+    }
+
+    if (typeof Module.registerHooks !== "function" || typeof __dirname !== "string") return;
+    const { pathToFileURL } = require("url");
+    const root = pathToFileURL(__dirname + path.sep).href;
+    const CHUNK = /^(?:\.\/|(?:\.\.\/)+)(?:chunk-[\w-]+|_\d+[\w-]*)\.js$/;
+    Module.registerHooks({
+      resolve(specifier, context, nextResolve) {
+        const parent = context.parentURL;
+        if (parent !== undefined && parent.startsWith(root) && CHUNK.test(specifier)) {
+          const url = new URL(specifier, parent).href;
+          if (url.startsWith(root)) return { url, format: "module", shortCircuit: true };
+        }
+        return nextResolve(specifier, context);
+      },
+    });
+  })();
 
   // Only the hooks Worker creation site is rewritten to this adapter.
   // Leave global Worker absent so node-forge keeps its Node fallbacks.
@@ -249,6 +292,15 @@ if (typeof globalThis.Bun === "undefined") {
     const buf = h.digest();
     return Number(buf.readBigUInt64LE(0) & 0xFFFFFFFFn);
   }
+  // Bun.hash.xxHash64 — callers format it as a 64-bit integer (e.g.
+  // `.toString(16).padStart(16,"0")` or `.toString(36)`), so this has to
+  // return a BigInt rather than the 32-bit Number bunHash() yields.
+  bunHash.xxHash64 = function xxHash64(data, seed) {
+    const input = typeof data === "string" || ArrayBuffer.isView(data) ? data : String(data);
+    const h = crypto.createHash("sha256").update(input);
+    if (seed !== undefined) h.update(String(seed));
+    return h.digest().readBigUInt64LE(0);
+  };
   bunHash.toString = () => "function hash() { [native code] }";
 
   // Load Anthropic-compatible ink implementations (bundled from source)
@@ -276,11 +328,88 @@ if (typeof globalThis.Bun === "undefined") {
   // bind it right away the way listen(port) without a host already does.
   function listenNow(server, port, host) {
     const family = net.isIP(host);
-    if (family && typeof server._listen2 === "function") {
+    if (family && Number.isInteger(port) && typeof server._listen2 === "function") {
       server._listen2(host, port, family, 511, undefined, 0);
     } else {
       server.listen(port, host);
     }
+  }
+
+  // ──────────────────────────────────────────────
+  // Bun socket wrapper — shared by Bun.listen and Bun.connect
+  // ──────────────────────────────────────────────
+  function wrapSocket(sock) {
+    return {
+      data: undefined,
+      write(data) {
+        const buf = typeof data === "string" ? Buffer.from(data, "utf8")
+          : Buffer.isBuffer(data) ? data
+          : Buffer.from(data);
+        if (sock.destroyed) return 0;
+        // Node already buffers when write() returns false; always report full
+        // acceptance to avoid caller-side double-buffer + re-write on drain.
+        sock.write(buf);
+        return buf.length;
+      },
+      end() {
+        try { sock.end(); } catch {}
+      },
+      terminate() {
+        try { sock.destroy(); } catch {}
+      },
+      get readyState() {
+        if (sock.destroyed) return 3;
+        if (sock.connecting) return 0;
+        return 1;
+      },
+      get remoteAddress() { return sock.remoteAddress; },
+      get remotePort() { return sock.remotePort; },
+      get localAddress() { return sock.localAddress; },
+      get localPort() { return sock.localPort; },
+    };
+  }
+
+  function attachSocketHandlers(sock, wrapper, handlers) {
+    sock.on("data", (chunk) => {
+      try { handlers.data?.(wrapper, chunk); } catch {}
+    });
+    sock.on("drain", () => {
+      try { handlers.drain?.(wrapper); } catch {}
+    });
+    sock.on("close", () => {
+      try { handlers.close?.(wrapper); } catch {}
+    });
+    sock.on("error", (err) => {
+      try { handlers.error?.(wrapper, err); } catch {}
+    });
+  }
+
+  // ──────────────────────────────────────────────
+  // Bun.connect — TCP client, resolves once connected
+  // ──────────────────────────────────────────────
+  function bunConnect(opts = {}) {
+    return new Promise((resolve, reject) => {
+      const handlers = opts.socket || {};
+      const sock = net.connect({
+        host: opts.hostname || opts.host || "127.0.0.1",
+        port: opts.port,
+      });
+      const wrapper = wrapSocket(sock);
+      let settled = false;
+
+      sock.once("connect", () => {
+        settled = true;
+        // Bun invokes open() before handing the socket back to the caller.
+        try { handlers.open?.(wrapper); } catch {}
+        resolve(wrapper);
+      });
+      // Only a pre-connect failure rejects; later errors go to the handler.
+      sock.once("error", (err) => {
+        if (!settled) { settled = true; reject(err); }
+      });
+
+      attachSocketHandlers(sock, wrapper, handlers);
+    });
   }
 
   // ──────────────────────────────────────────────
@@ -289,49 +418,9 @@ if (typeof globalThis.Bun === "undefined") {
   function bunListen(opts = {}) {
     const handlers = opts.socket || {};
     const server = net.createServer((sock) => {
-      const wrapper = {
-        data: undefined,
-        write(data) {
-          const buf = typeof data === "string" ? Buffer.from(data, "utf8")
-            : Buffer.isBuffer(data) ? data
-            : Buffer.from(data);
-          if (sock.destroyed) return 0;
-          // Node already buffers when write() returns false; always report full
-          // acceptance to avoid caller-side double-buffer + re-write on drain.
-          sock.write(buf);
-          return buf.length;
-        },
-        end() {
-          try { sock.end(); } catch {}
-        },
-        terminate() {
-          try { sock.destroy(); } catch {}
-        },
-        get readyState() {
-          if (sock.destroyed) return 3;
-          if (sock.connecting) return 0;
-          return 1;
-        },
-        get remoteAddress() { return sock.remoteAddress; },
-        get remotePort() { return sock.remotePort; },
-        get localAddress() { return sock.localAddress; },
-        get localPort() { return sock.localPort; },
-      };
-
+      const wrapper = wrapSocket(sock);
       try { handlers.open?.(wrapper); } catch {}
-
-      sock.on("data", (chunk) => {
-        try { handlers.data?.(wrapper, chunk); } catch {}
-      });
-      sock.on("drain", () => {
-        try { handlers.drain?.(wrapper); } catch {}
-      });
-      sock.on("close", () => {
-        try { handlers.close?.(wrapper); } catch {}
-      });
-      sock.on("error", (err) => {
-        try { handlers.error?.(wrapper, err); } catch {}
-      });
+      attachSocketHandlers(sock, wrapper, handlers);
     });
 
     const host = opts.hostname || opts.host || "127.0.0.1";
@@ -1221,12 +1310,17 @@ if (typeof globalThis.Bun === "undefined") {
     file: bunFile,
     sleepSync: (ms) => { Atomics.wait(sleepCell, 0, 0, ms); },
     TOML: { parse: (input) => require("./bun-toml-compat.cjs").parse(input) },
-    Image: require("./bun-image-compat.cjs"),
+    // Scaling and compression for pasted or attached images, plus the
+    // clipboard readers. Loaded lazily: the module pulls in sharp's native
+    // binding, which no command path needs unless an image shows up.
+    get Image() { return require("./bun-image-compat.cjs"); },
 
-    hash: function hash(data, seed) {
+    // Object.assign carries bunHash's own properties across — Bun.hash is
+    // callable *and* namespaces xxHash64, and a bare wrapper would drop it.
+    hash: Object.assign(function hash(data, seed) {
       if (arguments.length === 1) return bunHash(data);
       return bunHash(data, seed);
-    },
+    }, bunHash),
 
     // Since 2.1.251 embedded text assets ship zstd-compressed (*.md.zst);
     // Node has zstd in zlib since 22.15 / 23.8
@@ -1268,21 +1362,26 @@ if (typeof globalThis.Bun === "undefined") {
       return str;
     },
 
+    // Callers wrap order() in try/catch and rethrow as "Invalid SemVer", so a
+    // parse failure has to propagate. Only fall back when the module itself
+    // is unavailable, which is a different failure from bad input.
     semver: {
       order: (a, b) => {
-        try { return require("semver").compare(a, b); }
-        catch {
-          const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
-          for (let i = 0; i < 3; i++) {
-            if ((pa[i] || 0) > (pb[i] || 0)) return 1;
-            if ((pa[i] || 0) < (pb[i] || 0)) return -1;
-          }
-          return 0;
+        let semverModule;
+        try { semverModule = require("semver"); } catch { semverModule = null; }
+        if (semverModule) return semverModule.compare(a, b);
+        const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number);
+        for (let i = 0; i < 3; i++) {
+          if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+          if ((pa[i] || 0) < (pb[i] || 0)) return -1;
         }
+        return 0;
       },
       satisfies: (version, range) => {
-        try { return require("semver").satisfies(version, range); }
-        catch { return true; }
+        let semverModule;
+        try { semverModule = require("semver"); } catch { semverModule = null; }
+        if (!semverModule) return true;
+        return semverModule.satisfies(version, range);
       },
     },
 
@@ -1383,6 +1482,7 @@ if (typeof globalThis.Bun === "undefined") {
     },
 
     listen: bunListen,
+    connect: bunConnect,
     serve: bunServe,
     SQL: BunSQLPolyfill,
     stdin: bunStdin,

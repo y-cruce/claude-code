@@ -41,8 +41,8 @@ platform-specific `@img/sharp-*` native packages are installed separately.
 ## What it does
 
 1. Downloads official Claude Code binaries from all 8 platforms (darwin/linux/win32 × arm64/x64)
-2. Extracts the embedded JavaScript and native modules from Bun SEA format. Text assets that the module graph stores as UTF-16LE (14 `.md`/`.txt` prompt, skill and REPL files since 2.1.322) are written out as UTF-8, the encoding every reader expects
-3. Patches the code for Node.js compatibility (hardcoded paths, Bun-only APIs, module loading)
+2. Extracts the embedded JavaScript and native modules from Bun SEA format in a per-platform worker process (`scripts/extract-worker.mjs`) so native `node-lief` memory is reclaimed between platforms. Text assets that the module graph stores as UTF-16LE (14 `.md`/`.txt` prompt, skill and REPL files since 2.1.322) are written out as UTF-8, the encoding every reader expects
+3. Patches the code for Node.js compatibility (hardcoded paths, Bun-only APIs, module loading); `scripts/bun-api-coverage.mjs` can statically audit `Bun.*` usage and zstd-framed assets against `templates/bun-polyfill.js`
 4. Reassembles into a standard npm package with `vendor/` dependencies
 
 ## Bundle layouts
@@ -60,14 +60,15 @@ Split builds are patched directory-wide by `scripts/esm-split-patch.mjs`:
 |---------|-------------|
 | E1 | Import specifiers `"/$bunfs/root/chunk-x.js"` → relative `"./chunk-x.js"` (~110k per platform), so Node's ESM resolver finds the chunks shipped next to `cli.js` |
 | E2 | The remaining virtual-filesystem literals (~258 at 2.1.242, ~424 at 2.1.246) are runtime paths, not specifiers: native modules resolve through `globalThis.__ccVendorNode()` to the package's `vendor/` copy; assets (mermaid, chart.js, highlight.js, the HTML payload template, and since 2.1.246 embedded `.md`/`.txt` prompt files) and the hooks worker resolve through `globalThis.__ccAsset()` |
-| E3 | `import.meta.require` (Bun-only) → a `createRequire` wrapper that returns file *content* for `.md`/`.txt` paths, matching Bun's text loader — since 2.1.246 chunks `require()` embedded prompt files and would otherwise crash at startup compiling markdown as JS |
-| E4 | The P6 polyfill ships as `bun-polyfill.mjs`, imported first by `cli.js` and by the hooks worker so `globalThis.Bun` exists before any chunk body runs |
-| E5 | Since 2.1.250 chunks `import.meta.require()` **sibling chunks**, often at top level and inside import cycles, which Bun tolerates by re-entering evaluation but Node's `require(esm)` rejects (`ERR_REQUIRE_CYCLE_MODULE`). Three-layer emulation: top-level chunk requires get a hoisted bare `import` so the target is usually already evaluated (a plain cache hit); a require that still lands mid-cycle returns a lazy namespace proxy that re-requires on first access; a property grabbed off that proxy while the cycle is *still* evaluating (`var X=require(chunk).Prop`) returns a callable lazy value proxy, cached per `(module, prop)` so every grabber sees the identical object and `===` still holds |
-| E7 | `claude plugin test` children receive Node's VM Modules flags after environment filtering, so the testing kit can load `SourceTextModule` without a global `NODE_OPTIONS` setting |
+| E3 | `import.meta.require` (Bun-only) → a `createRequire` wrapper that returns file *content* for `.md`/`.txt`/`.mjs` paths, matching Bun's text loader — since 2.1.246 chunks `require()` embedded prompt files (and since 2.1.302 embedded `.mjs` skill scripts) and would otherwise fail compiling them as JS |
+| E4 | The P6 polyfill ships as `bun-polyfill.mjs`, imported first by `cli.js` and by the hooks worker so `globalThis.Bun` exists before any chunk body runs. It also enables V8's compile cache under `anthropic-cc/node-compile-cache` and installs a `Module.registerHooks` fast path for package-internal `chunk-*.js` / `_[0-9]*.js` relative imports |
+| E5 | Since 2.1.250 chunks `import.meta.require()` **sibling chunks**, often at top level and inside import cycles, which Bun tolerates by re-entering evaluation but Node's `require(esm)` rejects (`ERR_REQUIRE_CYCLE_MODULE`). Three-layer emulation: top-level chunk requires get a hoisted bare `import` so the target is usually already evaluated (a plain cache hit); a require that still lands mid-cycle returns a lazy namespace proxy (with cycle-safe reflection traps) that re-requires on first access; a property grabbed off that proxy while the cycle is *still* evaluating (`var X=require(chunk).Prop`) returns a callable/constructible lazy value proxy (binding methods to the real target), cached per `(module, prop)` so every grabber sees the identical object and `===` still holds |
+| E7 | `claude plugin test` children receive Node's VM Modules flags after environment filtering by wrapping any `env` expression (`env:{...(<expr>),NODE_OPTIONS:...}`), so the testing kit can load `SourceTextModule` without a global `NODE_OPTIONS` setting; a file containing the marker with zero matches fails the build |
 | E8 | Since 2.1.321 the `node:vm` context guard trusts a build-time "is Bun" flag that is always true in the bundle, so on Node every plugin hooks module failed to load (`Refusing to make a node:vm context`). The guard now asks the real runtime (`process.versions.bun`) and stays in force on Bun |
 | E9 | Headless/background plugin reloads register channel handlers when the MCP clients change, so replacement connections can confirm their startup probes without waiting for another user message. AST anchors derive the minified identifiers; a missing or ambiguous anchor fails the build |
 | E10 | Background sessions merge `CC_FORK_CHANNELS` into the normal `--channels` list, removing duplicates in order. AST anchors derive the channel bindings; missing, ambiguous or non-`let` bindings fail the build |
 | E11 | Code Mode (2.1.323+) admits only the native Bun build: its runtime gate asks whether Bun runs as a standalone executable, and its engine check needs `bun:jsc`. With `CLAUDE_CODE_NODE_UNSAFE_CODE_MODE=1` on Node, the runtime gate (E11a) and the engine check (E11b) pass; without it both refuse as before. AST anchors: the `if(!x())return"runtime"` guard in the Code Mode admission chunk and the `if(!x())return"not_bun"` guard in the engine check; a tree that mentions `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE` without exactly one of each fails the build. The P6 polyfill's `Bun.Transpiler({replMode:true})` produces the REPL envelope the tool expects. See [Code Mode on Node](#code-mode-on-node-unsafe) |
+| E12 | AST-only specifier rewrite redirects `node-fetch` imports/`require()` to the bundled `node-fetch-compat.mjs` shim (backed by `globalThis.fetch`, without touching string literals). AST rewriting also maps `import.meta.dir` → `dirname` and `import.meta.path` → `filename`, and a tree-wide guard fails the build if any unknown Bun-only `import.meta.*` property remains |
 
 Set `CC_FORK_CHANNELS` in the `env` object of `~/.claude/settings.json`, for example `"env": { "CC_FORK_CHANNELS": "plugin:my-notifier@my-marketplace" }`, to enable default channels only for background sessions.
 Entries use the same format as `--channels`, separated by commas or whitespace; the existing channel policy and plugin allowlist checks still apply.
@@ -84,14 +85,14 @@ Applied by `scripts/node-compat-patch.mjs` — to the extracted `cli.js` (~27MB)
 | P2 | `if (typeof Bun > "u") throw Error("Bun required")` guard around `Bun.Transpiler` → graceful `null` return. Not present since recent versions — the P6 polyfill covers it |
 | P3 | `require("/$bunfs/root/*.node")` — Bun SEA's virtual filesystem paths for native modules → resolved from the package's `vendor/` directory |
 | P5 | `EMBEDDED_SEARCH_TOOLS` guard restored (P5a: env var check, P5b: binary availability check) — enables Grep/Glob Tool by default; set `EMBEDDED_SEARCH_TOOLS=true` to switch to bfs/ugrep Bash shadow mode (falls back to Tool mode if binaries are missing) |
-| P6 | Global `Bun` polyfill shim injected at the top of the file. Implements `Bun.spawn` (Subprocess-like interface), `Bun.file`, `Bun.listen` (TCP), `Bun.serve` (HTTP/S), `Bun.hash`, `Bun.deepEquals`, `Bun.stdin`, `Bun.zstdDecompress`/`zstdDecompressSync` (embedded text assets ship zstd-compressed `*.md.zst` since 2.1.251; backed by `node:zlib`'s zstd, Node ≥ 22.15); `Bun.JSONL.parseChunk` is intentionally `null` so business code takes its own fallback path; `Bun.SQL` throws a clear not-implemented error; `Bun.Terminal`/`Bun.WebView`/heap-snapshot APIs are guarded no-ops. Skipped when the code contains ≥10 `typeof Bun` guards (dual-runtime fallbacks already present) |
+| P6 | Global `Bun` polyfill shim injected at the top of the file. Implements `Bun.spawn` (Subprocess-like interface), `Bun.file`, `Bun.listen`/`Bun.connect` (TCP server/client), `Bun.serve` (HTTP/S), `Bun.hash` (incl. `xxHash64`), `Bun.semver` (propagating invalid-version errors), lazy `Bun.Image`, `Bun.deepEquals`, `Bun.stdin`, `Bun.zstdDecompress`/`zstdDecompressSync` (embedded text assets ship zstd-compressed `*.md.zst` since 2.1.251; backed by `node:zlib`'s zstd, Node ≥ 22.15); `Bun.JSONL.parseChunk` is intentionally `null` so business code takes its own fallback path; `Bun.SQL` throws a clear not-implemented error; `Bun.Terminal`/`Bun.WebView`/heap-snapshot APIs are guarded no-ops. Skipped when the code contains ≥10 `typeof Bun` guards (dual-runtime fallbacks already present) |
 | P7 | Bundled `HttpsProxyAgent` exposed as `globalThis.__HttpsProxyAgent` — Node's `ws` needs an explicit agent to honor HTTP(S) proxies, unlike the Bun runtime |
 | P8 | In embedded search mode, the generated `find` and `grep` shell functions call `bfs` and `ugrep` from PATH. The wrappers preserve the leading arguments and options passed by the shell snapshot generator |
 | P9 | Package name rebranded: all `@anthropic-ai/claude-code` references (~250 occurrences) → `@cometix/anthropic-cc`, so the built-in auto-updater installs this package instead of the official Bun build |
 | P10 | CONNECT tunneling for HTTPS requests that axios forwards in absolute form through an HTTP proxy when only `ALL_PROXY` is set or axios is given an explicit `proxy` configuration. The P6 polyfill intercepts `http.request` calls whose `path` is an absolute `https://` URL and reissues them through a CONNECT tunnel. Remote Control uses its own CONNECT tunnel since 2.1.326 (see the [upstream issue](https://github.com/anthropics/claude-code/issues/71781)) |
 | P11 | Translate Bun's per-request `fetch` proxy option to an Undici dispatcher on Node. Model requests use the proxy selected by Claude Code, including proxies read from `settings.json`. Release verification checks the packaged CLI against a local HTTPS server and distinct settings and shell proxies. |
 
-Outside the patcher, the package also ships `bun-ink-compat.cjs` (precompiled ansi-regex/strip-ansi/string-width/ansi-styles/wrap-ansi for terminal text handling) and `install.cjs` (postinstall: detects platform incl. musl/Android and installs an isolated runtime tree).
+Outside the patcher, the package also ships `bun-ink-compat.cjs` (precompiled ansi-regex/strip-ansi/string-width/ansi-styles/wrap-ansi for terminal text handling, with NFC `.normalize()` removed in `wrapAnsi` so wide emoji placeholders like `U+2FA1D` are not decomposed) and `install.cjs` (postinstall: detects platform incl. musl/Android and installs an isolated runtime tree).
 
 ## Code Mode on Node (unsafe)
 
@@ -170,11 +171,12 @@ vendor/
 On `split-esm` builds (2.1.242+) the entry is joined by the rest of the module tree:
 
 ```
-runtime-entry.js    Original ESM entry point
-bun-polyfill.mjs    Bun API shim, imported first
-chunk-*.js, _*.js   ~1400 code-split modules
-*.md, *.txt         Embedded prompt texts (since 2.1.246)
-mermaid.min.js      Assets loaded at runtime
+runtime-entry.js      Original ESM entry point
+bun-polyfill.mjs      Bun API shim, imported first
+node-fetch-compat.mjs WHATWG fetch shim for node-fetch imports
+chunk-*.js, _*.js     ~1400 code-split modules
+*.md, *.txt           Embedded prompt texts (since 2.1.246)
+mermaid.min.js        Assets loaded at runtime
 chart.umd.min.js
 hljsBundle.generated.min.js
 payload.template.html.asset

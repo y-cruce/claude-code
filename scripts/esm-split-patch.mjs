@@ -99,14 +99,53 @@ export function rewriteBunfsPaths(code, prefix) {
   return { code, specifiers, literals };
 }
 
-// Bun names the current module directory `import.meta.dir`; Node exposes the
-// same value as `import.meta.dirname`. Leaving the Bun spelling intact makes
-// built-in hooks fail during startup when path.join receives undefined.
+// Bun names the current module folder and file `import.meta.dir` and
+// `import.meta.path`; Node exposes the same values as `import.meta.dirname`
+// and `import.meta.filename`. Matched on the AST so strings mentioning them
+// are untouched. Any other Bun-only `import.meta.*` property fails the build.
+const BUN_IMPORT_META = { dir: 'dirname', path: 'filename' };
+const NODE_IMPORT_META = new Set(['url', 'dirname', 'filename', 'resolve']);
+const BUN_META_TEXT = /import\.meta\.(?!(?:url|dirname|filename|resolve)\b)([A-Za-z_$][\w$]*)/g;
+
+function importMetaReads(code) {
+  let ast;
+  try {
+    ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  } catch {
+    return null;
+  }
+  const reads = [];
+  (function visit(node) {
+    if (node.type === 'MemberExpression' && !node.computed
+        && node.object.type === 'MetaProperty'
+        && node.object.meta.name === 'import' && node.object.property.name === 'meta') {
+      reads.push(node.property);
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) visit(item);
+      } else if (child?.type) visit(child);
+    }
+  })(ast);
+  return reads;
+}
+
 export function patchImportMetaDir(code) {
-  const pattern = /import\.meta\.dir\b/g;
-  const matches = code.match(pattern);
-  if (!matches) return { code, patched: 0 };
-  return { code: code.replace(pattern, 'import.meta.dirname'), patched: matches.length };
+  if (!/import\.meta\.(?:dir|path)\b/.test(code)) return { code, patched: 0 };
+  const sites = (importMetaReads(code) ?? []).filter((p) => Object.hasOwn(BUN_IMPORT_META, p.name));
+  let out = code;
+  for (const p of sites.sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, p.start) + BUN_IMPORT_META[p.name] + out.slice(p.end);
+  }
+  return { code: out, patched: sites.length };
+}
+
+export function bunOnlyImportMeta(code) {
+  const mentioned = [...code.matchAll(BUN_META_TEXT)].map((m) => m[1]);
+  if (mentioned.length === 0) return [];
+  const reads = importMetaReads(code);
+  const names = reads ? reads.map((p) => p.name) : mentioned;
+  return [...new Set(names.filter((n) => !NODE_IMPORT_META.has(n)))];
 }
 
 export function patchBuiltinHooksModuleShipping(code) {
@@ -200,9 +239,10 @@ export function hoistTopLevelChunkRequires(code, prefix) {
 }
 
 // Bun exposes import.meta.require; Node needs createRequire.
-// Bun's require also returns file CONTENT for text-loader assets (.md/.txt,
-// used since 2.1.246 for embedded prompts), so those go through readFileSync.
-// Object.assign keeps require.resolve/cache available on the wrapper.
+// Bun's require also returns file CONTENT for text-loader assets (.md/.txt
+// since 2.1.246, and embedded .mjs skill helpers since 2.1.302), so those go
+// through readFileSync instead of executing. Object.assign keeps
+// require.resolve/cache available on the wrapper.
 //
 // Since 2.1.250 chunks also require() OTHER CHUNKS at top level (hundreds of
 // sites). Node's require(esm) refuses modules whose graph is still mid-
@@ -212,21 +252,30 @@ export function hoistTopLevelChunkRequires(code, prefix) {
 //   which succeeds once the cycle has finished evaluating);
 // - property read on that proxy while the cycle is STILL evaluating (the
 //   top-level `var X=require(chunk).Prop` pattern) → lazy VALUE proxy,
-//   cached per (module, prop) so every grabber gets the identical object
-//   and === comparisons between them keep working.
+//   cached per (module, prop) in globalThis.__ccLazyVals so every grabber
+//   gets the identical object and === comparisons between them keep working.
+const TEXT_LOADER_EXT = /\.(?:md|txt|mjs)$/;
+
 export function patchImportMetaRequire(code) {
   if (!code.includes('import.meta.require')) return { code, patched: false };
   const inject = 'import{createRequire as __ccMakeRequire}from"module";'
     + 'import{readFileSync as __ccReadAsset}from"fs";'
     + 'const __ccRawRequire=__ccMakeRequire(import.meta.url);'
+    + 'const __ccCyclic=(e)=>e&&e.code==="ERR_REQUIRE_CYCLE_MODULE";'
+    + 'const __ccPeek=(id,p)=>{try{return{ok:!0,v:__ccRawRequire(id)[p]}}'
+    + 'catch(e){if(__ccCyclic(e))return{ok:!1};throw e}};'
     + 'globalThis.__ccLazyVals??=new Map();'
     + 'const __ccLazyVal=(id,p)=>{const k=id+"\\0"+p,m=globalThis.__ccLazyVals;'
     + 'if(m.has(k))return m.get(k);'
-    + 'let v,ok=!1;const g=()=>{if(!ok){v=__ccRawRequire(id)[p];ok=!0}return v};'
-    // target must be callable (grabbed values include functions) and free of
-    // non-configurable own props (proxy invariants) — an arrow fn is both
-    + 'const px=new Proxy(()=>{},{get:(_,q)=>g()?.[q],'
+    + 'let v,got=!1;const g=()=>{if(!got){const r=__ccPeek(id,p);if(r.ok){v=r.v;got=!0}}return v};'
+    // target must be callable, constructible, and free of non-configurable own
+    // props (a plain function has non-configurable `prototype`, breaking ownKeys
+    // and getOwnPropertyDescriptor for object exports); a bound fn satisfies all 3
+    + 'const px=new Proxy((function(){}).bind(),{get:(_,q)=>{const t=g();'
+    + 'if(t==null)return void 0;const x=t[q];'
+    + 'return typeof x==="function"?x.bind(t):x},'
     + 'apply:(_,th,a)=>Reflect.apply(g(),th,a),'
+    + 'construct:(_,a)=>Reflect.construct(g(),a),'
     + 'has:(_,q)=>{const t=g();return t!=null&&q in t},'
     + 'ownKeys:()=>{const t=g();return t==null?[]:Reflect.ownKeys(t)},'
     + 'getOwnPropertyDescriptor:(_,q)=>{const t=g(),'
@@ -234,23 +283,22 @@ export function patchImportMetaRequire(code) {
     + 'if(d)d.configurable=!0;return d},'
     + 'getPrototypeOf:()=>{const t=g();return t==null?null:Reflect.getPrototypeOf(Object(t))}});'
     + 'm.set(k,px);return px};'
-    + 'const __ccLazyNs=(id)=>{let n=null;const r=()=>n??(n=__ccRawRequire(id));'
-    + 'return new Proxy({},{'
+    + 'const __ccLazyNs=(id)=>new Proxy({},{'
     + 'get:(_,p)=>{const m=globalThis.__ccLazyVals;'
     + 'if(typeof p==="string"&&m.has(id+"\\0"+p))return m.get(id+"\\0"+p);'
-    + 'try{return r()[p]}catch(e){'
-    + 'if(e&&e.code==="ERR_REQUIRE_CYCLE_MODULE"){'
-    + 'if(typeof p!=="string"||p==="then")return;return __ccLazyVal(id,p)}'
-    + 'throw e}},'
-    + 'has:(_,p)=>p in r(),'
-    + 'ownKeys:()=>Reflect.ownKeys(r()),'
-    + 'getOwnPropertyDescriptor:(_,p)=>{const d=Reflect.getOwnPropertyDescriptor(r(),p);'
-    + 'if(d)d.configurable=!0;return d},'
-    + 'getPrototypeOf:()=>Reflect.getPrototypeOf(r())})};'
+    + 'const r=__ccPeek(id,p);'
+    + 'if(r.ok)return r.v;'
+    + 'if(typeof p!=="string"||p==="then")return void 0;'
+    + 'return __ccLazyVal(id,p)},'
+    + 'has:(_,p)=>{try{return p in __ccRawRequire(id)}catch(e){if(__ccCyclic(e))return!1;throw e}},'
+    + 'ownKeys:()=>{try{return Reflect.ownKeys(__ccRawRequire(id))}catch(e){if(__ccCyclic(e))return[];throw e}},'
+    + 'getOwnPropertyDescriptor:(_,p)=>{try{const d=Reflect.getOwnPropertyDescriptor(__ccRawRequire(id),p);'
+    + 'if(d)d.configurable=!0;return d}catch(e){if(__ccCyclic(e))return void 0;throw e}},'
+    + 'getPrototypeOf:()=>{try{return Reflect.getPrototypeOf(__ccRawRequire(id))}catch(e){if(__ccCyclic(e))return null;throw e}}});'
     + 'const __ccRequire=Object.assign((id)=>{'
-    + 'if(/\\.(md|txt)$/.test(id))return __ccReadAsset(id,"utf8");'
+    + `if(${TEXT_LOADER_EXT}.test(id))return __ccReadAsset(id,"utf8");`
     + 'try{return __ccRawRequire(id)}catch(e){'
-    + 'if(e&&e.code==="ERR_REQUIRE_CYCLE_MODULE")return __ccLazyNs(id);'
+    + 'if(__ccCyclic(e))return __ccLazyNs(id);'
     + 'throw e}},__ccRawRequire);';
   const at = firstStatementStart(code);
   code = code.slice(0, at) + inject + code.slice(at);
@@ -299,19 +347,34 @@ export function patchHooksWorker(code) {
 }
 
 // E7: plugin test filters NODE_OPTIONS before starting each test file on Node.
+// Wrap whatever expression builds `env` (call, object of spreads, shorthand)
+// so child processes get --experimental-vm-modules.
+const PLUGIN_TEST_ARGV = /['"]plugin['"]\s*,\s*['"]test['"]\s*,\s*['"]--file['"]/;
+const VM_MODULES_NODE_OPTIONS = '--experimental-vm-modules --disable-warning=ExperimentalWarning';
+
+const propertyNamed = (object, name) => object.properties.find((p) =>
+  p.type === 'Property' && !p.computed && (p.key.name ?? p.key.value) === name);
+
 export function patchPluginTestVm(code) {
-  if (!/['"]plugin['"]\s*,\s*['"]test['"]\s*,\s*['"]--file['"]/.test(code)) return { code, patched: 0 };
-  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
-  const inserts = [];
+  if (!PLUGIN_TEST_ARGV.test(code)) return { code, patched: 0 };
+  let ast;
+  try {
+    ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  } catch {
+    return { code, patched: 0 };
+  }
+  const sites = [];
   (function visit(node) {
-    if (node.type === 'CallExpression' && node.arguments[1]?.type === 'ArrayExpression') {
-      const args = node.arguments[1].elements;
-      const isTest = args.some((arg, i) => arg?.value === 'plugin' && args[i + 1]?.value === 'test' && args[i + 2]?.value === '--file');
-      const options = node.arguments[2];
-      const env = options?.type === 'ObjectExpression' && options.properties.find(p => (p.key?.name ?? p.key?.value) === 'env')?.value;
-      if (isTest && env?.type === 'ObjectExpression' && !env.properties.some(p => (p.key?.name ?? p.key?.value) === 'NODE_OPTIONS')) {
-        inserts.push({ at: env.end - 1, text: `${env.properties.length ? ',' : ''}NODE_OPTIONS:"--experimental-vm-modules --disable-warning=ExperimentalWarning"` });
-      }
+    if (node.type === 'CallExpression') {
+      const [, argv, options] = node.arguments;
+      const args = argv?.type === 'ArrayExpression' ? argv.elements : [];
+      const isTest = args.some((arg, i) => arg?.value === 'plugin'
+        && args[i + 1]?.value === 'test' && args[i + 2]?.value === '--file');
+      const env = isTest && options?.type === 'ObjectExpression'
+        ? propertyNamed(options, 'env') : null;
+      const settled = env?.value.type === 'ObjectExpression'
+        && propertyNamed(env.value, 'NODE_OPTIONS');
+      if (env && !settled) sites.push(env);
     }
     for (const child of Object.values(node)) {
       if (Array.isArray(child)) {
@@ -319,8 +382,14 @@ export function patchPluginTestVm(code) {
       } else if (child?.type) visit(child);
     }
   })(ast);
-  for (const { at, text } of inserts.reverse()) code = code.slice(0, at) + text + code.slice(at);
-  return { code, patched: inserts.length };
+  let out = code;
+  for (const prop of sites.sort((a, b) => b.start - a.start)) {
+    const value = out.slice(prop.value.start, prop.value.end);
+    out = out.slice(0, prop.start)
+      + `env:{...(${value}),NODE_OPTIONS:${JSON.stringify(VM_MODULES_NODE_OPTIONS)}}`
+      + out.slice(prop.end);
+  }
+  return { code: out, patched: sites.length };
 }
 
 // E8: 2.1.321 refuses to make a node:vm context when its build-time "is Bun"
@@ -508,15 +577,59 @@ export function patchNodeCodeMode(code) {
   return { code, admission: admissions, engine: engines };
 }
 
+// E12: Bun resolves `node-fetch` to a built-in; Node has no such package.
+// Repoint specifier positions to templates/node-fetch-compat.mjs via AST so
+// plain string literals mentioning "node-fetch" (e.g. embedded package.json)
+// are left untouched.
+const NODE_FETCH_MODULE = 'node-fetch-compat.mjs';
+
+export function rewriteNodeFetch(code, prefix) {
+  if (!code.includes('node-fetch')) return { code, rewritten: 0 };
+  let ast;
+  try {
+    ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  } catch {
+    return { code, rewritten: 0 };
+  }
+  const sites = [];
+  (function visit(node) {
+    const source = (node.type === 'ImportDeclaration'
+      || node.type === 'ImportExpression'
+      || node.type === 'ExportNamedDeclaration'
+      || node.type === 'ExportAllDeclaration') ? node.source : null;
+    if (source?.type === 'Literal' && source.value === 'node-fetch') sites.push(source);
+    if (node.type === 'CallExpression'
+        && node.callee?.type === 'Identifier' && node.callee.name === 'require'
+        && node.arguments[0]?.type === 'Literal'
+        && node.arguments[0].value === 'node-fetch') {
+      sites.push(node.arguments[0]);
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) visit(item);
+      } else if (child?.type) visit(child);
+    }
+  })(ast);
+  let out = code;
+  for (const node of sites.sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, node.start)
+      + JSON.stringify(`${prefix}${NODE_FETCH_MODULE}`)
+      + out.slice(node.end);
+  }
+  return { code: out, rewritten: sites.length };
+}
+
 export async function patchSplitEsm({ extractDir, entryPath }) {
   const files = await listJsFiles(extractDir);
-  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, vmGuards: 0, vmGuardFiles: 0, headlessChannels: 0, backgroundChannels: 0, codeModeFiles: 0, codeModeAdmission: 0, codeModeEngine: 0, ast: {} };
+  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTestMarkers: 0, pluginTests: 0, nodeFetch: 0, vmGuards: 0, vmGuardFiles: 0, headlessChannels: 0, backgroundChannels: 0, codeModeFiles: 0, codeModeAdmission: 0, codeModeEngine: 0, ast: {} };
+  const bunOnly = [];
 
   for (const file of files) {
     let code = await readFile(file, 'utf8');
     const before = code;
+    const prefix = prefixFor(file, extractDir);
 
-    const rewritten = rewriteBunfsPaths(code, prefixFor(file, extractDir));
+    const rewritten = rewriteBunfsPaths(code, prefix);
     code = rewritten.code;
     stats.specifiers += rewritten.specifiers;
     stats.literals += rewritten.literals;
@@ -533,9 +646,14 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     code = hooksWorker.code;
     stats.hooksWorkers += hooksWorker.patched;
 
+    if (PLUGIN_TEST_ARGV.test(code)) stats.pluginTestMarkers += 1;
     const pluginTest = patchPluginTestVm(code);
     code = pluginTest.code;
     stats.pluginTests += pluginTest.patched;
+
+    const nodeFetch = rewriteNodeFetch(code, prefix);
+    code = nodeFetch.code;
+    stats.nodeFetch += nodeFetch.rewritten;
 
     if (code.includes(VM_GUARD)) stats.vmGuardFiles += 1;
     const vmGuard = patchVmContextGuard(code);
@@ -560,7 +678,7 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
       stats.backgroundChannels += channel.patched;
     }
 
-    const hoist = hoistTopLevelChunkRequires(code, prefixFor(file, extractDir));
+    const hoist = hoistTopLevelChunkRequires(code, prefix);
     code = hoist.code;
     stats.hoisted += hoist.hoisted;
 
@@ -593,11 +711,21 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     }
 
     if (code !== before) await writeFile(file, code);
+    const rel = relative(extractDir, file);
+    for (const name of bunOnlyImportMeta(code)) bunOnly.push(`${rel}: import.meta.${name}`);
+  }
+
+  if (bunOnly.length > 0) {
+    throw new Error(`Bun-only import.meta properties remain after patching:\n  ${bunOnly.join('\n  ')}`);
   }
 
   const workerEntries = files.filter((f) => f.endsWith('hooks-worker.js'));
   if (workerEntries.length > 0 && stats.hooksWorkers !== 1) {
     throw new Error(`expected one hooks Worker creation site, patched ${stats.hooksWorkers}`);
+  }
+
+  if (stats.pluginTestMarkers > 0 && stats.pluginTests === 0) {
+    throw new Error(`E7: plugin test child argv found in ${stats.pluginTestMarkers} module(s), but no spawn site was patched`);
   }
 
   if (stats.vmGuardFiles > 0 && stats.vmGuards === 0) {
@@ -631,6 +759,8 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
   });
   await writeFile(join(extractDir, 'bun-image-compat.cjs'),
     readFileSync(join(__dirname, '..', 'templates', 'bun-image-compat.cjs')));
+  await writeFile(join(extractDir, NODE_FETCH_MODULE),
+    readFileSync(join(__dirname, '..', 'templates', NODE_FETCH_MODULE)));
 
   // Bun polyfill, ESM-wrapped, next to the entry
   let polyfill = readFileSync(join(__dirname, '..', 'templates', 'bun-polyfill.js'), 'utf8');

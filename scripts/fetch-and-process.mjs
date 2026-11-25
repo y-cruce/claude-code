@@ -1,13 +1,15 @@
-import { mkdir, rm, writeFile, readFile, stat, copyFile } from 'node:fs/promises';
+import { mkdir, rm, readFile, stat, copyFile } from 'node:fs/promises';
 import { readdirSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
-import { extractBunSEA, moduleContents } from './bun-sea-extract.mjs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { patchFile } from './node-compat-patch.mjs';
 import { patchSplitEsm } from './esm-split-patch.mjs';
 import { buildPlatformPackage } from './build-platform-package.mjs';
 import { buildMainPackage } from './build-main-package.mjs';
 import { verifyNodeCompat } from './verify-node-compat.mjs';
+
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 // ──────────────────────────────────────────────
 //  Constants
@@ -204,20 +206,12 @@ export async function fetchAndProcess({
     const binPath = join(tmpDir, 'bins', platform, info.binary);
     const extractDir = join(tmpDir, 'extract', platform);
 
-    const result = await extractBunSEA(binPath);
-    await mkdir(extractDir, { recursive: true });
-    for (let idx = 0; idx < result.modules.length; idx++) {
-      const mod = result.modules[idx];
-      let name = mod.name;
-      if (name.startsWith(result.basePath)) name = name.slice(result.basePath.length);
-      if (name.startsWith('root/')) name = name.slice(5);
-      if (idx === result.entryPointId) name = name.replace(/\.[^.]+$/, '') + '.' + mod.loader;
-      if (mod.contents?.length > 0) {
-        const outPath = join(extractDir, name);
-        await mkdir(join(outPath, '..'), { recursive: true });
-        await writeFile(outPath, moduleContents(mod));
-      }
-    }
+    // Extract out of process: lief leaves ~1GB of native memory the JS heap
+    // cannot reclaim, so eight platforms in one process exhaust the runner.
+    // Exiting after each one hands it all back.
+    execFileSync(process.execPath, [
+      join(SCRIPT_DIR, 'extract-worker.mjs'), binPath, extractDir,
+    ], { stdio: ['ignore', 'pipe', 'inherit'], timeout: 600_000 });
 
     // Verify Node.js compatibility before patching
     // v2.1.229+: embedded layout flattened, cli.js at extract root
